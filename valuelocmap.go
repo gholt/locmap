@@ -31,8 +31,21 @@ import (
 	"github.com/gholt/brimtext"
 )
 
+// ValueLocMap is an interface for tracking the mappings from keys to the
+// locations of their values.
+//
+// For documentation of each of these functions, see the DefaultValueLocMap.
+type ValueLocMap interface {
+	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint32, offset uint32, length uint32)
+	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
+	GatherStats(debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
+	DiscardTombstones(tombstoneCutoff uint64)
+	ScanCount(start uint64, stop uint64, max uint64) uint64
+	ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32))
+}
+
 type config struct {
-	cores           int
+	workers         int
 	roots           int
 	pageSize        int
 	splitMultiplier float64
@@ -40,27 +53,27 @@ type config struct {
 
 func resolveConfig(opts ...func(*config)) *config {
 	cfg := &config{}
-	if env := os.Getenv("BRIMSTORE_VALUELOCMAP_CORES"); env != "" {
+	if env := os.Getenv("VALUELOCMAP_WORKERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.cores = val
+			cfg.workers = val
 		}
-	} else if env = os.Getenv("BRIMSTORE_CORES"); env != "" {
+	} else if env = os.Getenv("VALUESTORE_WORKERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.cores = val
+			cfg.workers = val
 		}
 	}
-	if cfg.cores <= 0 {
-		cfg.cores = runtime.GOMAXPROCS(0)
+	if cfg.workers <= 0 {
+		cfg.workers = runtime.GOMAXPROCS(0)
 	}
-	if env := os.Getenv("BRIMSTORE_VALUELOCMAP_ROOTS"); env != "" {
+	if env := os.Getenv("VALUELOCMAP_ROOTS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.roots = val
 		}
 	}
 	if cfg.roots <= 0 {
-		cfg.roots = cfg.cores * cfg.cores
+		cfg.roots = cfg.workers * cfg.workers
 	}
-	if env := os.Getenv("BRIMSTORE_VALUELOCMAP_PAGESIZE"); env != "" {
+	if env := os.Getenv("VALUELOCMAP_PAGESIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.pageSize = val
 		}
@@ -68,7 +81,7 @@ func resolveConfig(opts ...func(*config)) *config {
 	if cfg.pageSize <= 0 {
 		cfg.pageSize = 1048576
 	}
-	if env := os.Getenv("BRIMSTORE_VALUELOCMAP_SPLITMULTIPLIER"); env != "" {
+	if env := os.Getenv("VALUELOCMAP_SPLITMULTIPLIER"); env != "" {
 		if val, err := strconv.ParseFloat(env, 64); err == nil {
 			cfg.splitMultiplier = val
 		}
@@ -79,8 +92,8 @@ func resolveConfig(opts ...func(*config)) *config {
 	for _, opt := range opts {
 		opt(cfg)
 	}
-	if cfg.cores < 1 {
-		cfg.cores = 1
+	if cfg.workers < 1 {
+		cfg.workers = 1
 	}
 	if cfg.roots < 2 {
 		cfg.roots = 2
@@ -95,25 +108,24 @@ func resolveConfig(opts ...func(*config)) *config {
 }
 
 // OptList returns a slice with the opts given; useful if you want to possibly
-// append more options to the list before using it with
-// NewValueLocMap(list...).
+// append more options to the list before using it with New(list...).
 func OptList(opts ...func(*config)) []func(*config) {
 	return opts
 }
 
-// OptCores indicates how many cores may be in use (for calculating the number
-// of locks to create, for example). Defaults to env
-// BRIMSTORE_VALUELOCMAP_CORES, BRIMSTORE_CORES, or GOMAXPROCS.
-func OptCores(cores int) func(*config) {
+// OptWorkers indicates how many workers may be in use (for calculating the
+// number of locks to create, for example). Defaults to env
+// VALUELOCMAP_WORKERS, VALUESTORE_WORKERS, or GOMAXPROCS.
+func OptWorkers(count int) func(*config) {
 	return func(cfg *config) {
-		cfg.cores = cores
+		cfg.workers = count
 	}
 }
 
 // OptRoots indicates how many top level nodes the map should have. More top
 // level nodes means less contention but a bit more memory. Defaults to
-// BRIMSTORE_VALUELOCMAP_ROOTS or the OptCores value squared. This will be
-// rounded up to the next power of two.
+// VALUELOCMAP_ROOTS or the OptWorkers value squared. This will be rounded up
+// to the next power of two.
 func OptRoots(roots int) func(*config) {
 	return func(cfg *config) {
 		cfg.roots = roots
@@ -121,7 +133,7 @@ func OptRoots(roots int) func(*config) {
 }
 
 // OptPageSize controls the size of each chunk of memory allocated. Defaults to
-// env BRIMSTORE_VALUELOCMAP_PAGESIZE or 524,288.
+// env VALUELOCMAP_PAGESIZE or 524,288.
 func OptPageSize(bytes int) func(*config) {
 	return func(cfg *config) {
 		cfg.pageSize = bytes
@@ -129,20 +141,19 @@ func OptPageSize(bytes int) func(*config) {
 }
 
 // OptSplitMultiplier indicates how full a memory page can get before being
-// split into two pages. Defaults to env BRIMSTORE_VALUELOCMAP_SPLITMULTIPLIER
-// or 3.0.
+// split into two pages. Defaults to env VALUELOCMAP_SPLITMULTIPLIER or 3.0.
 func OptSplitMultiplier(multiplier float64) func(*config) {
 	return func(cfg *config) {
 		cfg.splitMultiplier = multiplier
 	}
 }
 
-// ValueLocMap instances are created with NewValueLocMap.
-type ValueLocMap struct {
+// DefaultValueLocMap instances are created with New.
+type DefaultValueLocMap struct {
 	bits            uint32
 	lowMask         uint32
 	entriesLockMask uint32
-	cores           uint32
+	workers         uint32
 	splitCount      uint32
 	rootShift       uint64
 	roots           []node
@@ -179,7 +190,7 @@ type node struct {
 
 type stats struct {
 	statsDebug        bool
-	cores             uint32
+	workers           uint32
 	roots             uint32
 	usedRoots         uint32
 	entryPageSize     uint64
@@ -196,9 +207,9 @@ type stats struct {
 	length            uint64
 }
 
-func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
+func New(opts ...func(*config)) *DefaultValueLocMap {
 	cfg := resolveConfig(opts...)
-	vlm := &ValueLocMap{cores: uint32(cfg.cores)}
+	vlm := &DefaultValueLocMap{workers: uint32(cfg.workers)}
 	est := uint32(cfg.pageSize / int(unsafe.Sizeof(entry{})))
 	if est < 4 {
 		est = 4
@@ -229,7 +240,7 @@ func NewValueLocMap(opts ...func(*config)) *ValueLocMap {
 	return vlm
 }
 
-func (vlm *ValueLocMap) split(n *node) {
+func (vlm *DefaultValueLocMap) split(n *node) {
 	n.resizingLock.Lock()
 	if n.resizing {
 		n.resizingLock.Unlock()
@@ -240,7 +251,7 @@ func (vlm *ValueLocMap) split(n *node) {
 	vlm.split2(n)
 }
 
-func (vlm *ValueLocMap) split2(n *node) {
+func (vlm *DefaultValueLocMap) split2(n *node) {
 	n.lock.Lock()
 	u := atomic.LoadUint32(&n.used)
 	if u < n.splitCount {
@@ -391,7 +402,7 @@ func (vlm *ValueLocMap) split2(n *node) {
 	n.resizingLock.Unlock()
 }
 
-func (vlm *ValueLocMap) merge(n *node) {
+func (vlm *DefaultValueLocMap) merge(n *node) {
 	n.resizingLock.Lock()
 	if n.resizing {
 		n.resizingLock.Unlock()
@@ -402,7 +413,7 @@ func (vlm *ValueLocMap) merge(n *node) {
 	vlm.merge2(n)
 }
 
-func (vlm *ValueLocMap) merge2(n *node) {
+func (vlm *DefaultValueLocMap) merge2(n *node) {
 	n.lock.Lock()
 	if n.a == nil {
 		n.lock.Unlock()
@@ -498,7 +509,8 @@ func (vlm *ValueLocMap) merge2(n *node) {
 	n.resizingLock.Unlock()
 }
 
-func (vlm *ValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32, uint32) {
+// Get returns timestamp, blockID, offset, length for keyA, keyB.
+func (vlm *DefaultValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32, uint32) {
 	n := &vlm.roots[keyA>>vlm.rootShift]
 	n.lock.RLock()
 	for {
@@ -551,7 +563,13 @@ func (vlm *ValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32, u
 	return 0, 0, 0, 0
 }
 
-func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
+// Set stores timestamp, blockID, offset, length for keyA, keyB and returns the
+// previous timestamp stored. If a newer item is already stored for keyA, keyB,
+// that newer item is kept. If an item with the same timestamp is already
+// stored, it is usually kept unless evenIfSameTimestamp is set true, in which
+// case the passed in data is kept (useful to update a location that moved from
+// memory to disk, for example).
+func (vlm *DefaultValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
 	n := &vlm.roots[keyA>>vlm.rootShift]
 	var pn *node
 	n.lock.RLock()
@@ -711,10 +729,12 @@ func (vlm *ValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 	return 0
 }
 
-func (vlm *ValueLocMap) GatherStats(debug bool) (uint64, uint64, fmt.Stringer) {
+// GatherStats returns the active count, length, and a fmt.Stringer of
+// additional debug information (if debug is true).
+func (vlm *DefaultValueLocMap) GatherStats(debug bool) (uint64, uint64, fmt.Stringer) {
 	s := &stats{
 		statsDebug:        debug,
-		cores:             vlm.cores,
+		workers:           vlm.workers,
 		roots:             uint32(len(vlm.roots)),
 		entryPageSize:     uint64(vlm.lowMask) + 1,
 		entryLockPageSize: uint64(vlm.entriesLockMask) + 1,
@@ -732,7 +752,7 @@ func (vlm *ValueLocMap) GatherStats(debug bool) (uint64, uint64, fmt.Stringer) {
 }
 
 // Will call n.lock.RUnlock()
-func (vlm *ValueLocMap) gatherStats(s *stats, n *node, depth int) {
+func (vlm *DefaultValueLocMap) gatherStats(s *stats, n *node, depth int) {
 	if s.statsDebug {
 		s.nodes++
 		for len(s.depthCounts) <= depth {
@@ -814,7 +834,8 @@ func (vlm *ValueLocMap) gatherStats(s *stats, n *node, depth int) {
 	}
 }
 
-func (vlm *ValueLocMap) DiscardTombstones(tombstoneCutoff uint64) {
+// DiscardTombstones removes any deletion markers older than the cutoff.
+func (vlm *DefaultValueLocMap) DiscardTombstones(tombstoneCutoff uint64) {
 	for i := 0; i < len(vlm.roots); i++ {
 		n := &vlm.roots[i]
 		n.lock.RLock() // Will be released by discardTombstones
@@ -823,7 +844,7 @@ func (vlm *ValueLocMap) DiscardTombstones(tombstoneCutoff uint64) {
 }
 
 // Will call n.lock.RUnlock()
-func (vlm *ValueLocMap) discardTombstones(tombstoneCutoff uint64, n *node) {
+func (vlm *DefaultValueLocMap) discardTombstones(tombstoneCutoff uint64, n *node) {
 	if n.a != nil {
 		n.a.lock.RLock() // Will be released by discardTombstones
 		n.lock.RUnlock()
@@ -890,7 +911,9 @@ func (vlm *ValueLocMap) discardTombstones(tombstoneCutoff uint64, n *node) {
 	}
 }
 
-func (vlm *ValueLocMap) ScanCount(start uint64, stop uint64, max uint64) uint64 {
+// ScanCount returns the number of items in the start:stop range; if the count
+// exceeds the max given, counting will stop and a value >= max returned.
+func (vlm *DefaultValueLocMap) ScanCount(start uint64, stop uint64, max uint64) uint64 {
 	var c uint64
 	for i := 0; i < len(vlm.roots); i++ {
 		n := &vlm.roots[i]
@@ -901,7 +924,7 @@ func (vlm *ValueLocMap) ScanCount(start uint64, stop uint64, max uint64) uint64 
 }
 
 // Will call n.lock.RUnlock()
-func (vlm *ValueLocMap) scanCount(start uint64, stop uint64, max uint64, n *node) uint64 {
+func (vlm *DefaultValueLocMap) scanCount(start uint64, stop uint64, max uint64, n *node) uint64 {
 	if start > n.rangeStop || stop < n.rangeStart {
 		n.lock.RUnlock()
 		return 0
@@ -955,7 +978,8 @@ func (vlm *ValueLocMap) scanCount(start uint64, stop uint64, max uint64, n *node
 	}
 }
 
-func (vlm *ValueLocMap) ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) {
+// ScanCallback calls the callback for each item within the start:stop range.
+func (vlm *DefaultValueLocMap) ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) {
 	for i := 0; i < len(vlm.roots); i++ {
 		n := &vlm.roots[i]
 		n.lock.RLock() // Will be released by scanCallback
@@ -964,7 +988,7 @@ func (vlm *ValueLocMap) ScanCallback(start uint64, stop uint64, callback func(ke
 }
 
 // Will call n.lock.RUnlock()
-func (vlm *ValueLocMap) scanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32), n *node) {
+func (vlm *DefaultValueLocMap) scanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32), n *node) {
 	if start > n.rangeStop || stop < n.rangeStart {
 		n.lock.RUnlock()
 		return
@@ -1043,7 +1067,7 @@ func (s *stats) String() string {
 			depthCounts += fmt.Sprintf(" %d", s.depthCounts[i])
 		}
 		return brimtext.Align([][]string{
-			[]string{"cores", fmt.Sprintf("%d", s.cores)},
+			[]string{"workers", fmt.Sprintf("%d", s.workers)},
 			[]string{"roots", fmt.Sprintf("%d (%d bytes)", s.roots, uint64(s.roots)*uint64(unsafe.Sizeof(node{})))},
 			[]string{"usedRoots", fmt.Sprintf("%d", s.usedRoots)},
 			[]string{"entryPageSize", fmt.Sprintf("%d (%d bytes)", s.entryPageSize, uint64(s.entryPageSize)*uint64(unsafe.Sizeof(entry{})))},

@@ -2,10 +2,14 @@
 // keys to value locations. A key is 128 bits and is specified using two
 // uint64s (keyA, keyB). A value location is specified using a blockID, offset,
 // and length triplet. Each mapping is assigned a timestamp and the greatest
-// timestamp wins. The timestamp is also used to indicate a deletion marker; if
-// timestamp & 1 == 1 then the mapping is considered a mark for deletion at
-// that time. Deletion markers are used in case mappings come in out of order
-// and for replication to others that may have missed the deletion.
+// timestamp wins.
+//
+// The timestamp is usually used with some number of the lowest bits used to
+// designate active and inactive entries. For example, the lowest bit might be
+// used as 0 = active, 1 = deletion marker so that deletion events are retained
+// for some time period before being completely removed with Discard. Exactly
+// how many bits are used and what they're used for is outside the scope of the
+// mapping itself.
 //
 // This implementation essentially uses a tree structure of slices of key to
 // location assignments. When a slice fills up, an additional slice is created
@@ -14,8 +18,8 @@
 // tree shrinks. The tree is balanced by high bits of the key, and locations
 // are distributed in the slices by the low bits.
 //
-// There are also functions for scanning key ranges, both to clean out old
-// tombstones and to provide callbacks for replication or other tasks.
+// There are also functions for scanning key ranges, both to clean out matching
+// entries and to provide callbacks for replication or other tasks.
 package valuelocmap
 
 import (
@@ -38,8 +42,8 @@ import (
 type ValueLocMap interface {
 	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint32, offset uint32, length uint32)
 	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
-	GatherStats(debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
-	DiscardTombstones(tombstoneCutoff uint64)
+	GatherStats(inactiveMask uint64, debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
+	Discard(mask uint64, cutoff uint64)
 	ScanCount(start uint64, stop uint64, max uint64) uint64
 	ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32))
 }
@@ -189,6 +193,7 @@ type node struct {
 }
 
 type stats struct {
+	inactiveMask      uint64
 	statsDebug        bool
 	workers           uint32
 	roots             uint32
@@ -202,7 +207,7 @@ type stats struct {
 	allocedInOverflow uint64
 	usedEntries       uint64
 	usedInOverflow    uint64
-	tombstones        uint64
+	inactive          uint64
 	active            uint64
 	length            uint64
 }
@@ -568,7 +573,9 @@ func (vlm *DefaultValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, ui
 // that newer item is kept. If an item with the same timestamp is already
 // stored, it is usually kept unless evenIfSameTimestamp is set true, in which
 // case the passed in data is kept (useful to update a location that moved from
-// memory to disk, for example).
+// memory to disk, for example). Setting an item to blockID == 0 removes it
+// from the mapping if the timestamp stored is less than (or equal to if
+// evenIfSameTimestamp) the timestamp passed in.
 func (vlm *DefaultValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
 	n := &vlm.roots[keyA>>vlm.rootShift]
 	var pn *node
@@ -730,9 +737,13 @@ func (vlm *DefaultValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, b
 }
 
 // GatherStats returns the active count, length, and a fmt.Stringer of
-// additional debug information (if debug is true).
-func (vlm *DefaultValueLocMap) GatherStats(debug bool) (uint64, uint64, fmt.Stringer) {
+// additional debug information (if debug is true). The inactiveMask will be
+// applied to each item's timestamp to determine if it is active (timestamp &
+// inactiveMask == 0) and to be included in the active count and length
+// returned.
+func (vlm *DefaultValueLocMap) GatherStats(inactiveMask uint64, debug bool) (uint64, uint64, fmt.Stringer) {
 	s := &stats{
+		inactiveMask:      inactiveMask,
 		statsDebug:        debug,
 		workers:           vlm.workers,
 		roots:             uint32(len(vlm.roots)),
@@ -810,13 +821,13 @@ func (vlm *DefaultValueLocMap) gatherStats(s *stats, n *node, depth int) {
 					if o {
 						s.usedInOverflow++
 					}
-					if e.timestamp&1 == 0 {
+					if e.timestamp&s.inactiveMask == 0 {
 						s.active++
 						s.length += uint64(e.length)
 					} else {
-						s.tombstones++
+						s.inactive++
 					}
-				} else if e.timestamp&1 == 0 {
+				} else if e.timestamp&s.inactiveMask == 0 {
 					s.active++
 					s.length += uint64(e.length)
 				}
@@ -834,26 +845,26 @@ func (vlm *DefaultValueLocMap) gatherStats(s *stats, n *node, depth int) {
 	}
 }
 
-// DiscardTombstones removes any deletion markers older than the cutoff.
-func (vlm *DefaultValueLocMap) DiscardTombstones(tombstoneCutoff uint64) {
+// Discard removes any items whose timestamp & mask != 0 && timestamp < cutoff.
+func (vlm *DefaultValueLocMap) Discard(mask uint64, cutoff uint64) {
 	for i := 0; i < len(vlm.roots); i++ {
 		n := &vlm.roots[i]
-		n.lock.RLock() // Will be released by discardTombstones
-		vlm.discardTombstones(tombstoneCutoff, n)
+		n.lock.RLock() // Will be released by discard
+		vlm.discard(mask, cutoff, n)
 	}
 }
 
 // Will call n.lock.RUnlock()
-func (vlm *DefaultValueLocMap) discardTombstones(tombstoneCutoff uint64, n *node) {
+func (vlm *DefaultValueLocMap) discard(mask uint64, cutoff uint64, n *node) {
 	if n.a != nil {
-		n.a.lock.RLock() // Will be released by discardTombstones
+		n.a.lock.RLock() // Will be released by discard
 		n.lock.RUnlock()
-		vlm.discardTombstones(tombstoneCutoff, n.a)
+		vlm.discard(mask, cutoff, n.a)
 		n.lock.RLock()
 		if n.b != nil {
-			n.b.lock.RLock() // Will be released by discardTombstones
+			n.b.lock.RLock() // Will be released by discard
 			n.lock.RUnlock()
-			vlm.discardTombstones(tombstoneCutoff, n.b)
+			vlm.discard(mask, cutoff, n.b)
 		}
 	} else if n.used == 0 {
 		n.lock.RUnlock()
@@ -872,7 +883,7 @@ func (vlm *DefaultValueLocMap) discardTombstones(tombstoneCutoff uint64, n *node
 			}
 			var p *entry
 			for {
-				if e.timestamp&1 != 0 && e.timestamp < tombstoneCutoff {
+				if e.timestamp&mask != 0 && e.timestamp < cutoff {
 					if p == nil {
 						if e.next == 0 {
 							e.blockID = 0
@@ -1067,6 +1078,7 @@ func (s *stats) String() string {
 			depthCounts += fmt.Sprintf(" %d", s.depthCounts[i])
 		}
 		return brimtext.Align([][]string{
+			[]string{"inactiveMask", fmt.Sprintf("%016x", s.inactiveMask)},
 			[]string{"workers", fmt.Sprintf("%d", s.workers)},
 			[]string{"roots", fmt.Sprintf("%d (%d bytes)", s.roots, uint64(s.roots)*uint64(unsafe.Sizeof(node{})))},
 			[]string{"usedRoots", fmt.Sprintf("%d", s.usedRoots)},
@@ -1080,7 +1092,7 @@ func (s *stats) String() string {
 			[]string{"allocedInOverflow", fmt.Sprintf("%d %.1f%%", s.allocedInOverflow, 100*float64(s.allocedInOverflow)/float64(s.allocedEntries))},
 			[]string{"usedEntries", fmt.Sprintf("%d %.1f%%", s.usedEntries, 100*float64(s.usedEntries)/float64(s.allocedEntries))},
 			[]string{"usedInOverflow", fmt.Sprintf("%d %.1f%%", s.usedInOverflow, 100*float64(s.usedInOverflow)/float64(s.usedEntries))},
-			[]string{"tombstones", fmt.Sprintf("%d %.1f%%", s.tombstones, 100*float64(s.tombstones)/float64(s.usedEntries))},
+			[]string{"inactive", fmt.Sprintf("%d %.1f%%", s.inactive, 100*float64(s.inactive)/float64(s.usedEntries))},
 			[]string{"active", fmt.Sprintf("%d %.1f%%", s.active, 100*float64(s.active)/float64(s.usedEntries))},
 			[]string{"length", fmt.Sprintf("%d", s.length)},
 		}, nil)

@@ -259,8 +259,11 @@ func (vlm *DefaultValueLocMap) split(n *node) {
 func (vlm *DefaultValueLocMap) split2(n *node) {
 	n.lock.Lock()
 	u := atomic.LoadUint32(&n.used)
-	if u < n.splitCount {
+	if n.a != nil || u < n.splitCount {
 		n.lock.Unlock()
+		n.resizingLock.Lock()
+		n.resizing = false
+		n.resizingLock.Unlock()
 		return
 	}
 	hm := n.highMask
@@ -348,6 +351,8 @@ func (vlm *DefaultValueLocMap) split2(n *node) {
 				an.overflowLowestFree = ae.next
 			}
 			ae.next = aen.next
+			aen.blockID = 0
+			aen.next = 0
 			an.used--
 		}
 	}
@@ -397,7 +402,10 @@ func (vlm *DefaultValueLocMap) split2(n *node) {
 			if ae.next < an.overflowLowestFree {
 				an.overflowLowestFree = ae.next
 			}
-			*ae = ao[ae.next>>b][ae.next&lm]
+			aen := &ao[ae.next>>b][ae.next&lm]
+			*ae = *aen
+			aen.blockID = 0
+			aen.next = 0
 		}
 		an.used--
 	}
@@ -422,6 +430,9 @@ func (vlm *DefaultValueLocMap) merge2(n *node) {
 	n.lock.Lock()
 	if n.a == nil {
 		n.lock.Unlock()
+		n.resizingLock.Lock()
+		n.resizing = false
+		n.resizingLock.Unlock()
 		return
 	}
 	an := n.a
@@ -429,15 +440,60 @@ func (vlm *DefaultValueLocMap) merge2(n *node) {
 	if atomic.LoadUint32(&an.used) < atomic.LoadUint32(&bn.used) {
 		an, bn = bn, an
 	}
+	an.resizingLock.Lock()
+	if an.resizing {
+		an.resizingLock.Unlock()
+		n.lock.Unlock()
+		n.resizingLock.Lock()
+		n.resizing = false
+		n.resizingLock.Unlock()
+		return
+	}
+	an.resizing = true
+	an.resizingLock.Unlock()
 	an.lock.Lock()
+	if an.a != nil {
+		an.lock.Unlock()
+		an.resizingLock.Lock()
+		an.resizing = false
+		an.resizingLock.Unlock()
+		n.lock.Unlock()
+		n.resizingLock.Lock()
+		n.resizing = false
+		n.resizingLock.Unlock()
+		return
+	}
+	bn.resizingLock.Lock()
+	if bn.resizing {
+		bn.resizingLock.Unlock()
+		an.lock.Unlock()
+		an.resizingLock.Lock()
+		an.resizing = false
+		an.resizingLock.Unlock()
+		n.lock.Unlock()
+		n.resizingLock.Lock()
+		n.resizing = false
+		n.resizingLock.Unlock()
+		return
+	}
+	bn.resizing = true
+	bn.resizingLock.Unlock()
 	bn.lock.Lock()
-	n.a = nil
-	n.b = nil
-	n.entries = an.entries
-	n.entriesLocks = an.entriesLocks
-	n.overflow = an.overflow
-	n.overflowLowestFree = an.overflowLowestFree
-	n.used = an.used
+	if bn.a != nil {
+		bn.lock.Unlock()
+		bn.resizingLock.Lock()
+		bn.resizing = false
+		bn.resizingLock.Unlock()
+		an.lock.Unlock()
+		an.resizingLock.Lock()
+		an.resizing = false
+		an.resizingLock.Unlock()
+		n.lock.Unlock()
+		n.resizingLock.Lock()
+		n.resizing = false
+		n.resizingLock.Unlock()
+		return
+	}
 	b := vlm.bits
 	lm := vlm.lowMask
 	aes := an.entries
@@ -505,9 +561,21 @@ func (vlm *DefaultValueLocMap) merge2(n *node) {
 			be = &bo[be.next>>b][be.next&lm]
 		}
 	}
-	bn.used = 0
+	n.a = nil
+	n.b = nil
+	n.entries = an.entries
+	n.entriesLocks = an.entriesLocks
+	n.overflow = an.overflow
+	n.overflowLowestFree = an.overflowLowestFree
+	n.used = an.used
 	bn.lock.Unlock()
+	bn.resizingLock.Lock()
+	bn.resizing = false
+	bn.resizingLock.Unlock()
 	an.lock.Unlock()
+	an.resizingLock.Lock()
+	an.resizing = false
+	an.resizingLock.Unlock()
 	n.lock.Unlock()
 	n.resizingLock.Lock()
 	n.resizing = false
@@ -544,6 +612,7 @@ func (vlm *DefaultValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, ui
 	l.RLock()
 	if e.blockID == 0 {
 		l.RUnlock()
+		n.lock.RUnlock()
 		return 0, 0, 0, 0
 	}
 	for {
@@ -635,17 +704,18 @@ func (vlm *DefaultValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, b
 							f = e.next
 							ol.RLock()
 							en := &n.overflow[f>>b][f&lm]
-							*e = *en
-							en.blockID = 0
 							ol.RUnlock()
+							*e = *en
+							e = en
 						}
 					} else {
 						ep.next = e.next
-						e.blockID = 0
 					}
 					u := atomic.AddUint32(&n.used, ^uint32(0))
 					if f != 0 {
 						ol.Lock()
+						e.blockID = 0
+						e.next = 0
 						if f < n.overflowLowestFree {
 							n.overflowLowestFree = f
 						}
@@ -679,7 +749,9 @@ func (vlm *DefaultValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, b
 	}
 	var u uint32
 	e = &n.entries[i]
-	if e.blockID != 0 {
+	if e.blockID == 0 {
+		e.next = 0
+	} else {
 		ol.Lock()
 		o := n.overflow
 		oc := uint32(len(o))
@@ -894,11 +966,13 @@ func (vlm *DefaultValueLocMap) discard(mask uint64, cutoff uint64, n *node) {
 							ol.RUnlock()
 							*e = *en
 							en.blockID = 0
+							en.next = 0
 							continue
 						}
 					} else {
 						p.next = e.next
 						e.blockID = 0
+						e.next = 0
 						if p.next == 0 {
 							break
 						}

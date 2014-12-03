@@ -685,52 +685,54 @@ func (vlm *DefaultValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, b
 		var f uint32
 		for {
 			if e.keyA == keyA && e.keyB == keyB {
-				if e.timestamp < timestamp || (evenIfSameTimestamp && e.timestamp == timestamp) {
-					if blockID != 0 {
-						t := e.timestamp
-						e.timestamp = timestamp
-						e.blockID = blockID
-						e.offset = offset
-						e.length = length
-						l.Unlock()
-						n.lock.RUnlock()
-						return t
-					}
-					t := e.timestamp
-					if ep == nil {
-						if e.next == 0 {
-							e.blockID = 0
-						} else {
-							f = e.next
-							ol.RLock()
-							en := &n.overflow[f>>b][f&lm]
-							ol.RUnlock()
-							*e = *en
-							e = en
-						}
-					} else {
-						ep.next = e.next
-					}
-					u := atomic.AddUint32(&n.used, ^uint32(0))
-					if f != 0 {
-						ol.Lock()
+				t := e.timestamp
+				if e.timestamp > timestamp || (e.timestamp == timestamp && !evenIfSameTimestamp) {
+					l.Unlock()
+					n.lock.RUnlock()
+					return t
+				}
+				if blockID != 0 {
+					e.timestamp = timestamp
+					e.blockID = blockID
+					e.offset = offset
+					e.length = length
+					l.Unlock()
+					n.lock.RUnlock()
+					return t
+				}
+				var u uint32
+				if ep == nil {
+					if e.next == 0 {
 						e.blockID = 0
-						e.next = 0
+					} else {
+						f = e.next
+						ol.Lock()
+						en := &n.overflow[f>>b][f&lm]
+						*e = *en
+						en.blockID = 0
+						en.next = 0
 						if f < n.overflowLowestFree {
 							n.overflowLowestFree = f
 						}
 						ol.Unlock()
 					}
-					l.Unlock()
-					n.lock.RUnlock()
-					if u <= n.mergeCount && pn != nil {
-						vlm.merge(pn)
+				} else {
+					ol.Lock()
+					ep.next = e.next
+					e.blockID = 0
+					e.next = 0
+					if f < n.overflowLowestFree {
+						n.overflowLowestFree = f
 					}
-					return t
+					ol.Unlock()
 				}
+				u = atomic.AddUint32(&n.used, ^uint32(0))
 				l.Unlock()
 				n.lock.RUnlock()
-				return e.timestamp
+				if u <= n.mergeCount && pn != nil {
+					vlm.merge(pn)
+				}
+				return t
 			}
 			if e.next == 0 {
 				break
@@ -747,10 +749,14 @@ func (vlm *DefaultValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, b
 		n.lock.RUnlock()
 		return 0
 	}
-	var u uint32
 	e = &n.entries[i]
 	if e.blockID == 0 {
-		e.next = 0
+		e.keyA = keyA
+		e.keyB = keyB
+		e.timestamp = timestamp
+		e.blockID = blockID
+		e.offset = offset
+		e.length = length
 	} else {
 		ol.Lock()
 		o := n.overflow
@@ -791,15 +797,15 @@ func (vlm *DefaultValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, b
 				n.overflowLowestFree = oc<<b + 1
 			}
 		}
+		e.keyA = keyA
+		e.keyB = keyB
+		e.timestamp = timestamp
+		e.blockID = blockID
+		e.offset = offset
+		e.length = length
 		ol.Unlock()
 	}
-	e.keyA = keyA
-	e.keyB = keyB
-	e.timestamp = timestamp
-	e.blockID = blockID
-	e.offset = offset
-	e.length = length
-	u = atomic.AddUint32(&n.used, 1)
+	u := atomic.AddUint32(&n.used, 1)
 	l.Unlock()
 	n.lock.RUnlock()
 	if u >= n.splitCount {

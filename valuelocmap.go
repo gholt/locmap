@@ -43,9 +43,10 @@ type ValueLocMap interface {
 	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint32, offset uint32, length uint32)
 	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
 	GatherStats(inactiveMask uint64, debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
-	Discard(mask uint64)
+	Discard(start uint64, stop uint64, mask uint64)
 	ScanCount(start uint64, stop uint64, max uint64) uint64
 	ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32))
+	ScanCallbackV2(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) (stopped uint64, more bool)
 }
 
 type config struct {
@@ -923,83 +924,97 @@ func (vlm *DefaultValueLocMap) gatherStats(s *stats, n *node, depth int) {
 	}
 }
 
-// Discard removes any items whose timestamp & mask != 0.
-func (vlm *DefaultValueLocMap) Discard(mask uint64) {
+// Discard removes any items in the start:stop (inclusive) range whose
+// timestamp & mask != 0.
+func (vlm *DefaultValueLocMap) Discard(start uint64, stop uint64, mask uint64) {
 	for i := 0; i < len(vlm.roots); i++ {
 		n := &vlm.roots[i]
 		n.lock.RLock() // Will be released by discard
-		vlm.discard(mask, n)
+		vlm.discard(start, stop, mask, n)
 	}
 }
 
 // Will call n.lock.RUnlock()
-func (vlm *DefaultValueLocMap) discard(mask uint64, n *node) {
+func (vlm *DefaultValueLocMap) discard(start uint64, stop uint64, mask uint64, n *node) {
+	if start > n.rangeStop || stop < n.rangeStart {
+		n.lock.RUnlock()
+		return
+	}
 	if n.a != nil {
 		n.a.lock.RLock() // Will be released by discard
 		n.lock.RUnlock()
-		vlm.discard(mask, n.a)
+		vlm.discard(start, stop, mask, n.a)
 		n.lock.RLock()
 		if n.b != nil {
 			n.b.lock.RLock() // Will be released by discard
 			n.lock.RUnlock()
-			vlm.discard(mask, n.b)
+			vlm.discard(start, stop, mask, n.b)
 		}
-	} else if n.used == 0 {
+		return
+	}
+	if n.used == 0 {
 		n.lock.RUnlock()
-	} else {
-		b := vlm.bits
-		lm := vlm.lowMask
-		es := n.entries
-		ol := &n.overflowLock
-		for i := uint32(0); i <= lm; i++ {
-			e := &es[i]
-			l := &n.entriesLocks[i&vlm.entriesLockMask]
-			l.Lock()
-			if e.blockID == 0 {
-				l.Unlock()
-				continue
-			}
-			var p *entry
-			for {
-				if e.timestamp&mask != 0 {
-					if p == nil {
-						if e.next == 0 {
-							e.blockID = 0
-							break
-						} else {
-							ol.RLock()
-							en := &n.overflow[e.next>>b][e.next&lm]
-							ol.RUnlock()
-							*e = *en
-							en.blockID = 0
-							en.next = 0
-							continue
-						}
-					} else {
-						p.next = e.next
+		return
+	}
+	b := vlm.bits
+	lm := vlm.lowMask
+	es := n.entries
+	ol := &n.overflowLock
+	for i := uint32(0); i <= lm; i++ {
+		e := &es[i]
+		l := &n.entriesLocks[i&vlm.entriesLockMask]
+		l.Lock()
+		if e.blockID == 0 {
+			l.Unlock()
+			continue
+		}
+		var p *entry
+		for {
+			if e.keyA >= start && e.keyA <= stop && e.timestamp&mask != 0 {
+				if p == nil {
+					if e.next == 0 {
 						e.blockID = 0
-						e.next = 0
-						if p.next == 0 {
-							break
+						break
+					} else {
+						ol.Lock()
+						if e.next < n.overflowLowestFree {
+							n.overflowLowestFree = e.next
 						}
-						ol.RLock()
-						e = &n.overflow[p.next>>b][p.next&lm]
-						ol.RUnlock()
+						en := &n.overflow[e.next>>b][e.next&lm]
+						*e = *en
+						en.blockID = 0
+						en.next = 0
+						ol.Unlock()
 						continue
 					}
+				} else {
+					ol.Lock()
+					if p.next < n.overflowLowestFree {
+						n.overflowLowestFree = p.next
+					}
+					p.next = e.next
+					e.blockID = 0
+					e.next = 0
+					if p.next == 0 {
+						ol.Unlock()
+						break
+					}
+					e = &n.overflow[p.next>>b][p.next&lm]
+					ol.Unlock()
+					continue
 				}
-				if e.next == 0 {
-					break
-				}
-				p = e
-				ol.RLock()
-				e = &n.overflow[e.next>>b][e.next&lm]
-				ol.RUnlock()
 			}
-			l.Unlock()
+			if e.next == 0 {
+				break
+			}
+			p = e
+			ol.RLock()
+			e = &n.overflow[e.next>>b][e.next&lm]
+			ol.RUnlock()
 		}
-		n.lock.RUnlock()
+		l.Unlock()
 	}
+	n.lock.RUnlock()
 }
 
 // ScanCount returns the number of items in the start:stop range; if the count
@@ -1149,6 +1164,125 @@ func (vlm *DefaultValueLocMap) scanCallback(start uint64, stop uint64, callback 
 		}
 		n.lock.RUnlock()
 	}
+}
+
+// ScanCallbackV2 calls the callback for each item within the start:stop range
+// (inclusive) whose timestamp & mask != 0, timestamp & notMask == 0, and
+// timestamp <= cutoff, up to max times; it will return the keyA value the scan
+// stopped and more will be true if there are possibly more items but max was
+// reached.
+func (vlm *DefaultValueLocMap) ScanCallbackV2(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) (uint64, bool) {
+	var stopped uint64
+	var more bool
+	for i := 0; i < len(vlm.roots); i++ {
+		n := &vlm.roots[i]
+		n.lock.RLock() // Will be released by scanCallbackV2
+		max, stopped, more = vlm.scanCallbackV2(start, stop, mask, notMask, cutoff, max, callback, n)
+		if more {
+			break
+		}
+	}
+	return stopped, more
+}
+
+// Will call n.lock.RUnlock()
+func (vlm *DefaultValueLocMap) scanCallbackV2(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32), n *node) (uint64, uint64, bool) {
+	if start > n.rangeStop || stop < n.rangeStart {
+		n.lock.RUnlock()
+		return max, stop, false
+	}
+	if n.a != nil {
+		var stopped uint64
+		var more bool
+		n.a.lock.RLock() // Will be released by scanCallbackV2
+		n.lock.RUnlock()
+		max, stopped, more = vlm.scanCallbackV2(start, stop, mask, notMask, cutoff, max, callback, n.a)
+		if !more {
+			n.lock.RLock()
+			if n.b != nil {
+				n.b.lock.RLock() // Will be released by scanCallbackV2
+				n.lock.RUnlock()
+				max, stopped, more = vlm.scanCallbackV2(start, stop, mask, notMask, cutoff, max, callback, n.b)
+			}
+		}
+		return max, stopped, more
+	}
+	if n.used == 0 {
+		n.lock.RUnlock()
+		return max, stop, false
+	}
+	if start <= n.rangeStart && stop >= n.rangeStop {
+		var stopped uint64
+		var more bool
+		b := vlm.bits
+		lm := vlm.lowMask
+		es := n.entries
+		ol := &n.overflowLock
+		for i := uint32(0); i <= lm; i++ {
+			e := &es[i]
+			l := &n.entriesLocks[i&vlm.entriesLockMask]
+			l.RLock()
+			if e.blockID == 0 {
+				l.RUnlock()
+				continue
+			}
+			for {
+				if e.timestamp&mask != 0 && e.timestamp&notMask == 0 && e.timestamp <= cutoff {
+					if max < 1 {
+						stopped = n.rangeStart
+						more = true
+						break
+					}
+					callback(e.keyA, e.keyB, e.timestamp, e.length)
+					max--
+				}
+				if e.next == 0 {
+					break
+				}
+				ol.RLock()
+				e = &n.overflow[e.next>>b][e.next&lm]
+				ol.RUnlock()
+			}
+			l.RUnlock()
+		}
+		n.lock.RUnlock()
+		return max, stopped, more
+	}
+	var stopped uint64
+	var more bool
+	b := vlm.bits
+	lm := vlm.lowMask
+	es := n.entries
+	ol := &n.overflowLock
+	for i := uint32(0); i <= lm; i++ {
+		e := &es[i]
+		l := &n.entriesLocks[i&vlm.entriesLockMask]
+		l.RLock()
+		if e.blockID == 0 {
+			l.RUnlock()
+			continue
+		}
+		for {
+			if e.keyA >= start && e.keyA <= stop && e.timestamp&mask != 0 && e.timestamp&notMask == 0 && e.timestamp <= cutoff {
+				if max < 1 {
+					stopped = n.rangeStart
+					more = true
+					break
+				}
+				callback(e.keyA, e.keyB, e.timestamp, e.length)
+				max--
+			}
+			if e.next == 0 {
+				break
+			}
+			ol.RLock()
+			e = &n.overflow[e.next>>b][e.next&lm]
+			ol.RUnlock()
+		}
+		l.RUnlock()
+	}
+	n.lock.RUnlock()
+	return max, stopped, more
 }
 
 func (s *stats) String() string {

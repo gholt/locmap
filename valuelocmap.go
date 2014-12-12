@@ -43,7 +43,7 @@ type ValueLocMap interface {
 	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint32, offset uint32, length uint32)
 	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
 	GatherStats(inactiveMask uint64, debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
-	Discard(mask uint64, cutoff uint64)
+	Discard(mask uint64)
 	ScanCount(start uint64, stop uint64, max uint64) uint64
 	ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32))
 }
@@ -923,26 +923,26 @@ func (vlm *DefaultValueLocMap) gatherStats(s *stats, n *node, depth int) {
 	}
 }
 
-// Discard removes any items whose timestamp & mask != 0 && timestamp < cutoff.
-func (vlm *DefaultValueLocMap) Discard(mask uint64, cutoff uint64) {
+// Discard removes any items whose timestamp & mask != 0.
+func (vlm *DefaultValueLocMap) Discard(mask uint64) {
 	for i := 0; i < len(vlm.roots); i++ {
 		n := &vlm.roots[i]
 		n.lock.RLock() // Will be released by discard
-		vlm.discard(mask, cutoff, n)
+		vlm.discard(mask, n)
 	}
 }
 
 // Will call n.lock.RUnlock()
-func (vlm *DefaultValueLocMap) discard(mask uint64, cutoff uint64, n *node) {
+func (vlm *DefaultValueLocMap) discard(mask uint64, n *node) {
 	if n.a != nil {
 		n.a.lock.RLock() // Will be released by discard
 		n.lock.RUnlock()
-		vlm.discard(mask, cutoff, n.a)
+		vlm.discard(mask, n.a)
 		n.lock.RLock()
 		if n.b != nil {
 			n.b.lock.RLock() // Will be released by discard
 			n.lock.RUnlock()
-			vlm.discard(mask, cutoff, n.b)
+			vlm.discard(mask, n.b)
 		}
 	} else if n.used == 0 {
 		n.lock.RUnlock()
@@ -961,7 +961,7 @@ func (vlm *DefaultValueLocMap) discard(mask uint64, cutoff uint64, n *node) {
 			}
 			var p *entry
 			for {
-				if e.timestamp&mask != 0 && e.timestamp < cutoff {
+				if e.timestamp&mask != 0 {
 					if p == nil {
 						if e.next == 0 {
 							e.blockID = 0

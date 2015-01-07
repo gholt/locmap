@@ -17,9 +17,6 @@
 // a slice empties, it is merged with its pair in the tree structure and the
 // tree shrinks. The tree is balanced by high bits of the key, and locations
 // are distributed in the slices by the low bits.
-//
-// There are also functions for scanning key ranges, both to clean out matching
-// entries and to provide callbacks for replication or other tasks.
 package valuelocmap
 
 import (
@@ -1167,10 +1164,27 @@ func (vlm *DefaultValueLocMap) scanCallback(start uint64, stop uint64, callback 
 }
 
 // ScanCallbackV2 calls the callback for each item within the start:stop range
-// (inclusive) whose timestamp & mask != 0, timestamp & notMask == 0, and
-// timestamp <= cutoff, up to max times; it will return the keyA value the scan
-// stopped and more will be true if there are possibly more items but max was
-// reached.
+// (inclusive) whose timestamp & mask != 0 || mask == 0,
+// timestamp & notMask == 0, and timestamp <= cutoff, up to max times; it will
+// return the keyA value the scan stopped and more will be true if there are
+// possibly more items but max was reached.
+//
+// Note that callbacks may have been made with keys that were greater than or
+// equal to where the scan indicated it had stopped (reached the max). This is
+// because the callbacks are made as items are encountered while walking the
+// structure and the structure is not 100% in key order. The items are grouped
+// and the groups are in key order, but the items in each group are not. The
+// max, if reached, will likely be reached in the middle of a group. This means
+// that items may be duplicated in a subsequent scan that begins where a
+// previous scan indicated it stopped.
+//
+// In practice with valuestore this hasn't been an issue yet. Discard passes
+// don't duplicate because the same keys won't match the modified mask from the
+// previous pass. Outgoing pull replication passes just end up with some
+// additional keys placed in the bloom filter resulting in slightly higher
+// false positive rates (corrected for with subsequent iterations). Outgoing
+// push replication passes end up sending duplicate information, wasting a bit
+// of bandwidth.
 func (vlm *DefaultValueLocMap) ScanCallbackV2(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) (uint64, bool) {
 	var stopped uint64
 	var more bool
@@ -1227,7 +1241,7 @@ func (vlm *DefaultValueLocMap) scanCallbackV2(start uint64, stop uint64, mask ui
 				continue
 			}
 			for {
-				if e.timestamp&mask != 0 && e.timestamp&notMask == 0 && e.timestamp <= cutoff {
+				if (mask == 0 || e.timestamp&mask != 0) && e.timestamp&notMask == 0 && e.timestamp <= cutoff {
 					if max < 1 {
 						stopped = n.rangeStart
 						more = true
@@ -1263,7 +1277,7 @@ func (vlm *DefaultValueLocMap) scanCallbackV2(start uint64, stop uint64, mask ui
 			continue
 		}
 		for {
-			if e.keyA >= start && e.keyA <= stop && e.timestamp&mask != 0 && e.timestamp&notMask == 0 && e.timestamp <= cutoff {
+			if e.keyA >= start && e.keyA <= stop && (mask == 0 || e.timestamp&mask != 0) && e.timestamp&notMask == 0 && e.timestamp <= cutoff {
 				if max < 1 {
 					stopped = n.rangeStart
 					more = true

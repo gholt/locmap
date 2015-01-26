@@ -156,7 +156,7 @@ type DefaultValueLocMap struct {
 	lowMask         uint32
 	entriesLockMask uint32
 	workers         uint32
-	splitCount      uint32
+	splitLevel      uint32
 	rootShift       uint64
 	roots           []node
 }
@@ -178,8 +178,8 @@ type node struct {
 	highMask           uint64
 	rangeStart         uint64
 	rangeStop          uint64
-	splitCount         uint32
-	mergeCount         uint32
+	splitLevel         uint32
+	mergeLevel         uint32
 	a                  *node
 	b                  *node
 	entries            []entry
@@ -198,7 +198,7 @@ type stats struct {
 	usedRoots         uint32
 	entryPageSize     uint64
 	entryLockPageSize uint64
-	splitCount        uint32
+	splitLevel        uint32
 	nodes             uint64
 	depthCounts       []uint64
 	allocedEntries    uint64
@@ -231,14 +231,14 @@ func New(opts ...func(*config)) *DefaultValueLocMap {
 		c <<= 1
 	}
 	vlm.entriesLockMask = c - 1
-	vlm.splitCount = uint32(float64(uint32(1<<vlm.bits)) * cfg.splitMultiplier)
+	vlm.splitLevel = uint32(float64(uint32(1<<vlm.bits)) * cfg.splitMultiplier)
 	vlm.roots = make([]node, c)
 	for i := 0; i < len(vlm.roots); i++ {
 		vlm.roots[i].highMask = uint64(1) << (vlm.rootShift - 1)
 		vlm.roots[i].rangeStart = uint64(i) << vlm.rootShift
 		vlm.roots[i].rangeStop = uint64(1)<<vlm.rootShift - 1 + vlm.roots[i].rangeStart
-		vlm.roots[i].splitCount = uint32(float64(vlm.splitCount) + (rand.Float64()-.5)/5*float64(vlm.splitCount))
-		vlm.roots[i].mergeCount = uint32(rand.Float64() / 10 * float64(vlm.splitCount))
+		vlm.roots[i].splitLevel = uint32(float64(vlm.splitLevel) + (rand.Float64()-.5)/5*float64(vlm.splitLevel))
+		vlm.roots[i].mergeLevel = uint32(rand.Float64() / 10 * float64(vlm.splitLevel))
 	}
 	return vlm
 }
@@ -257,7 +257,7 @@ func (vlm *DefaultValueLocMap) split(n *node) {
 func (vlm *DefaultValueLocMap) split2(n *node) {
 	n.lock.Lock()
 	u := atomic.LoadUint32(&n.used)
-	if n.a != nil || u < n.splitCount {
+	if n.a != nil || u < n.splitLevel {
 		n.lock.Unlock()
 		n.resizingLock.Lock()
 		n.resizing = false
@@ -269,8 +269,8 @@ func (vlm *DefaultValueLocMap) split2(n *node) {
 		highMask:           hm >> 1,
 		rangeStart:         n.rangeStart,
 		rangeStop:          hm - 1 + n.rangeStart,
-		splitCount:         uint32(float64(vlm.splitCount) + (rand.Float64()-.5)/5*float64(vlm.splitCount)),
-		mergeCount:         uint32(rand.Float64() / 10 * float64(vlm.splitCount)),
+		splitLevel:         uint32(float64(vlm.splitLevel) + (rand.Float64()-.5)/5*float64(vlm.splitLevel)),
+		mergeLevel:         uint32(rand.Float64() / 10 * float64(vlm.splitLevel)),
 		entries:            n.entries,
 		entriesLocks:       n.entriesLocks,
 		overflow:           n.overflow,
@@ -281,8 +281,8 @@ func (vlm *DefaultValueLocMap) split2(n *node) {
 		highMask:     hm >> 1,
 		rangeStart:   hm + n.rangeStart,
 		rangeStop:    n.rangeStop,
-		splitCount:   uint32(float64(vlm.splitCount) + (rand.Float64()-.5)/5*float64(vlm.splitCount)),
-		mergeCount:   uint32(rand.Float64() / 10 * float64(vlm.splitCount)),
+		splitLevel:   uint32(float64(vlm.splitLevel) + (rand.Float64()-.5)/5*float64(vlm.splitLevel)),
+		mergeLevel:   uint32(rand.Float64() / 10 * float64(vlm.splitLevel)),
 		entries:      make([]entry, len(n.entries)),
 		entriesLocks: make([]sync.RWMutex, len(n.entriesLocks)),
 	}
@@ -727,7 +727,7 @@ func (vlm *DefaultValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, b
 				u = atomic.AddUint32(&n.used, ^uint32(0))
 				l.Unlock()
 				n.lock.RUnlock()
-				if u <= n.mergeCount && pn != nil {
+				if u <= n.mergeLevel && pn != nil {
 					vlm.merge(pn)
 				}
 				return t
@@ -806,7 +806,7 @@ func (vlm *DefaultValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, b
 	u := atomic.AddUint32(&n.used, 1)
 	l.Unlock()
 	n.lock.RUnlock()
-	if u >= n.splitCount {
+	if u >= n.splitLevel {
 		vlm.split(n)
 	}
 	return 0
@@ -825,7 +825,7 @@ func (vlm *DefaultValueLocMap) GatherStats(inactiveMask uint64, debug bool) (uin
 		roots:             uint32(len(vlm.roots)),
 		entryPageSize:     uint64(vlm.lowMask) + 1,
 		entryLockPageSize: uint64(vlm.entriesLockMask) + 1,
-		splitCount:        uint32(vlm.splitCount),
+		splitLevel:        uint32(vlm.splitLevel),
 	}
 	for i := uint32(0); i < s.roots; i++ {
 		n := &vlm.roots[i]
@@ -1312,7 +1312,7 @@ func (s *stats) String() string {
 			[]string{"usedRoots", fmt.Sprintf("%d", s.usedRoots)},
 			[]string{"entryPageSize", fmt.Sprintf("%d (%d bytes)", s.entryPageSize, uint64(s.entryPageSize)*uint64(unsafe.Sizeof(entry{})))},
 			[]string{"entryLockPageSize", fmt.Sprintf("%d (%d bytes)", s.entryLockPageSize, uint64(s.entryLockPageSize)*uint64(unsafe.Sizeof(sync.RWMutex{})))},
-			[]string{"splitCount", fmt.Sprintf("%d +-10%%", s.splitCount)},
+			[]string{"splitLevel", fmt.Sprintf("%d +-10%%", s.splitLevel)},
 			[]string{"nodes", fmt.Sprintf("%d", s.nodes)},
 			[]string{"depth", fmt.Sprintf("%d", len(s.depthCounts))},
 			[]string{"depthCounts", depthCounts},

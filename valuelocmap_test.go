@@ -1,8 +1,6 @@
 package valuelocmap
 
-import (
-	"testing"
-)
+import "testing"
 
 func TestSetNewKeyOldTimestampIs0AndNewKeySaved(t *testing.T) {
 	vlm := New()

@@ -3,7 +3,7 @@ package valuelocmap
 import "testing"
 
 func TestSetNewKeyOldTimestampIs0AndNewKeySaved(t *testing.T) {
-	vlm := New()
+	vlm := New().(*valueLocMap)
 	keyA := uint64(0)
 	keyB := uint64(0)
 	timestamp := uint64(2)
@@ -30,7 +30,7 @@ func TestSetNewKeyOldTimestampIs0AndNewKeySaved(t *testing.T) {
 }
 
 func TestSetOverwriteKeyOldTimestampIsOldAndOverwriteWins(t *testing.T) {
-	vlm := New()
+	vlm := New().(*valueLocMap)
 	keyA := uint64(0)
 	keyB := uint64(0)
 	timestamp1 := uint64(2)
@@ -62,7 +62,7 @@ func TestSetOverwriteKeyOldTimestampIsOldAndOverwriteWins(t *testing.T) {
 }
 
 func TestSetOldOverwriteKeyOldTimestampIsPreviousAndPreviousWins(t *testing.T) {
-	vlm := New()
+	vlm := New().(*valueLocMap)
 	keyA := uint64(0)
 	keyB := uint64(0)
 	timestamp1 := uint64(4)
@@ -94,7 +94,7 @@ func TestSetOldOverwriteKeyOldTimestampIsPreviousAndPreviousWins(t *testing.T) {
 }
 
 func TestSetOverwriteKeyOldTimestampIsSameAndOverwriteIgnored(t *testing.T) {
-	vlm := New()
+	vlm := New().(*valueLocMap)
 	keyA := uint64(0)
 	keyB := uint64(0)
 	timestamp1 := uint64(2)
@@ -126,7 +126,7 @@ func TestSetOverwriteKeyOldTimestampIsSameAndOverwriteIgnored(t *testing.T) {
 }
 
 func TestSetOverwriteKeyOldTimestampIsSameAndOverwriteWins(t *testing.T) {
-	vlm := New()
+	vlm := New().(*valueLocMap)
 	keyA := uint64(0)
 	keyB := uint64(0)
 	timestamp1 := uint64(2)
@@ -158,7 +158,7 @@ func TestSetOverwriteKeyOldTimestampIsSameAndOverwriteWins(t *testing.T) {
 }
 
 func TestSetOverflowingKeys(t *testing.T) {
-	vlm := New(OptRoots(1), OptPageSize(1))
+	vlm := New(OptRoots(1), OptPageSize(1)).(*valueLocMap)
 	keyA1 := uint64(0)
 	keyB1 := uint64(0)
 	timestamp1 := uint64(2)
@@ -208,7 +208,7 @@ func TestSetOverflowingKeys(t *testing.T) {
 }
 
 func TestSetOverflowingKeysReuse(t *testing.T) {
-	vlm := New(OptRoots(1), OptPageSize(1))
+	vlm := New(OptRoots(1), OptPageSize(1)).(*valueLocMap)
 	keyA1 := uint64(0)
 	keyB1 := uint64(0)
 	timestamp1 := uint64(2)
@@ -301,7 +301,7 @@ func TestSetOverflowingKeysReuse(t *testing.T) {
 }
 
 func TestSetOverflowingKeysLots(t *testing.T) {
-	vlm := New(OptRoots(1), OptPageSize(1), OptSplitMultiplier(1000))
+	vlm := New(OptRoots(1), OptPageSize(1), OptSplitMultiplier(1000)).(*valueLocMap)
 	keyA := uint64(0)
 	timestamp := uint64(2)
 	blockID := uint32(1)
@@ -494,7 +494,7 @@ func TestSetOverflowingKeysLots(t *testing.T) {
 }
 
 func TestSetNewKeyBlockID0OldTimestampIs0AndNoEffect(t *testing.T) {
-	vlm := New()
+	vlm := New().(*valueLocMap)
 	keyA := uint64(0)
 	keyB := uint64(0)
 	timestamp := uint64(2)
@@ -521,7 +521,7 @@ func TestSetNewKeyBlockID0OldTimestampIs0AndNoEffect(t *testing.T) {
 }
 
 func TestSetOverwriteKeyBlockID0OldTimestampIsOldAndOverwriteWins(t *testing.T) {
-	vlm := New()
+	vlm := New().(*valueLocMap)
 	keyA := uint64(0)
 	keyB := uint64(0)
 	timestamp1 := uint64(2)
@@ -553,7 +553,7 @@ func TestSetOverwriteKeyBlockID0OldTimestampIsOldAndOverwriteWins(t *testing.T) 
 }
 
 func TestSetOldOverwriteKeyBlockID0OldTimestampIsPreviousAndPreviousWins(t *testing.T) {
-	vlm := New()
+	vlm := New().(*valueLocMap)
 	keyA := uint64(0)
 	keyB := uint64(0)
 	timestamp1 := uint64(4)
@@ -585,7 +585,7 @@ func TestSetOldOverwriteKeyBlockID0OldTimestampIsPreviousAndPreviousWins(t *test
 }
 
 func TestSetOverwriteKeyBlockID0OldTimestampIsSameAndOverwriteIgnored(t *testing.T) {
-	vlm := New()
+	vlm := New().(*valueLocMap)
 	keyA := uint64(0)
 	keyB := uint64(0)
 	timestamp1 := uint64(2)
@@ -617,7 +617,7 @@ func TestSetOverwriteKeyBlockID0OldTimestampIsSameAndOverwriteIgnored(t *testing
 }
 
 func TestSetOverwriteKeyBlockID0OldTimestampIsSameAndOverwriteWins(t *testing.T) {
-	vlm := New()
+	vlm := New().(*valueLocMap)
 	keyA := uint64(0)
 	keyB := uint64(0)
 	timestamp1 := uint64(2)

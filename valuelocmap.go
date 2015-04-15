@@ -4,12 +4,12 @@
 // and length triplet. Each mapping is assigned a timestamp and the greatest
 // timestamp wins.
 //
-// The timestamp is usually used with some number of the lowest bits used to
-// designate active and inactive entries. For example, the lowest bit might be
-// used as 0 = active, 1 = deletion marker so that deletion events are retained
-// for some time period before being completely removed with Discard. Exactly
-// how many bits are used and what they're used for is outside the scope of the
-// mapping itself.
+// The timestamp usually has some number of the lowest bits in use for state
+// information such as active and inactive entries. For example, the lowest bit
+// might be used as 0 = active, 1 = deletion marker so that deletion events are
+// retained for some time period before being completely removed with Discard.
+// Exactly how many bits are used and what they're used for is outside the
+// scope of the mapping itself.
 //
 // This implementation essentially uses a tree structure of slices of key to
 // location assignments. When a slice fills up, an additional slice is created
@@ -34,16 +34,55 @@ import (
 
 // ValueLocMap is an interface for tracking the mappings from keys to the
 // locations of their values.
-//
-// For documentation of each of these functions, see the DefaultValueLocMap.
 type ValueLocMap interface {
+	// Get returns timestamp, blockID, offset, length for keyA, keyB.
 	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint32, offset uint32, length uint32)
+	// Set stores timestamp, blockID, offset, length for keyA, keyB and returns
+	// the previous timestamp stored. If a newer item is already stored for
+	// keyA, keyB, that newer item is kept. If an item with the same timestamp
+	// is already stored, it is usually kept unless evenIfSameTimestamp is set
+	// true, in which case the passed in data is kept (useful to update a
+	// location that moved from memory to disk, for example). Setting an item
+	// to blockID == 0 removes it from the mapping if the timestamp stored is
+	// less than (or equal to if evenIfSameTimestamp) the timestamp passed in.
 	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
+	// GatherStats returns the active count, length, and a fmt.Stringer of
+	// additional debug information (if debug is true). The inactiveMask will
+	// be applied to each item's timestamp to determine if it is active
+	// (timestamp & inactiveMask == 0) and to be included in the active count
+	// and length returned.
 	GatherStats(inactiveMask uint64, debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
+	// Discard removes any items in the start:stop (inclusive) range whose
+	// timestamp & mask != 0.
 	Discard(start uint64, stop uint64, mask uint64)
+	// ScanCount returns the number of items in the start:stop range; if the
+	// count exceeds the max given, counting will stop and a value >= max
+	// returned.
 	ScanCount(start uint64, stop uint64, max uint64) uint64
-	ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32))
-	ScanCallbackV2(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) (stopped uint64, more bool)
+	// ScanCallback calls the callback for each item within the start:stop
+	// range (inclusive) whose timestamp & mask != 0 || mask == 0, timestamp &
+	// notMask == 0, and timestamp <= cutoff, up to max times; it will return
+	// the keyA value the scan stopped and more will be true if there are
+	// possibly more items but max was reached.
+	//
+	// Note that callbacks may have been made with keys that were greater than
+	// or equal to where the scan indicated it had stopped (reached the max).
+	// This is because the callbacks are made as items are encountered while
+	// walking the structure and the structure is not 100% in key order. The
+	// items are grouped and the groups are in key order, but the items in each
+	// group are not. The max, if reached, will likely be reached in the middle
+	// of a group. This means that items may be duplicated in a subsequent scan
+	// that begins where a previous scan indicated it stopped.
+	//
+	// In practice with the valuestore use case this hasn't been an issue yet.
+	// Discard passes don't duplicate because the same keys won't match the
+	// modified mask from the previous pass. Outgoing pull replication passes
+	// just end up with some additional keys placed in the bloom filter
+	// resulting in slightly higher false positive rates (corrected for with
+	// subsequent iterations). Outgoing push replication passes end up sending
+	// duplicate information, wasting a bit of bandwidth.
+	ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) (stopped uint64, more bool)
+	DeprecatedScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32))
 }
 
 type config struct {
@@ -150,8 +189,7 @@ func OptSplitMultiplier(multiplier float64) func(*config) {
 	}
 }
 
-// DefaultValueLocMap instances are created with New.
-type DefaultValueLocMap struct {
+type valueLocMap struct {
 	bits            uint32
 	lowMask         uint32
 	entriesLockMask uint32
@@ -210,9 +248,24 @@ type stats struct {
 	length            uint64
 }
 
-func New(opts ...func(*config)) *DefaultValueLocMap {
+// New returns a new ValueLocMap instance using the options given.
+//
+// You can provide Opt* functions for the optional configuration items, such as
+// OptWorkers:
+//
+//  vlmWithDefaults := valuelocmap.New()
+//  vlmWithOptions := valuelocmap.New(
+//      valuelocmap.OptWorkers(10),
+//      valuelocmap.OptPageSize(1048576),
+//  )
+//  opts := valuelocmap.OptList()
+//  if commandLineOptionForWorkers {
+//      opts = append(opts, valuelocmap.OptWorkers(commandLineOptionValue))
+//  }
+//  vlmWithOptionsBuiltUp := valuelocmap.New(opts...)
+func New(opts ...func(*config)) ValueLocMap {
 	cfg := resolveConfig(opts...)
-	vlm := &DefaultValueLocMap{workers: uint32(cfg.workers)}
+	vlm := &valueLocMap{workers: uint32(cfg.workers)}
 	est := uint32(cfg.pageSize / int(unsafe.Sizeof(entry{})))
 	if est < 4 {
 		est = 4
@@ -243,7 +296,7 @@ func New(opts ...func(*config)) *DefaultValueLocMap {
 	return vlm
 }
 
-func (vlm *DefaultValueLocMap) split(n *node) {
+func (vlm *valueLocMap) split(n *node) {
 	n.resizingLock.Lock()
 	if n.resizing {
 		n.resizingLock.Unlock()
@@ -254,7 +307,7 @@ func (vlm *DefaultValueLocMap) split(n *node) {
 	vlm.split2(n)
 }
 
-func (vlm *DefaultValueLocMap) split2(n *node) {
+func (vlm *valueLocMap) split2(n *node) {
 	n.lock.Lock()
 	u := atomic.LoadUint32(&n.used)
 	if n.a != nil || u < n.splitLevel {
@@ -413,7 +466,7 @@ func (vlm *DefaultValueLocMap) split2(n *node) {
 	n.resizingLock.Unlock()
 }
 
-func (vlm *DefaultValueLocMap) merge(n *node) {
+func (vlm *valueLocMap) merge(n *node) {
 	n.resizingLock.Lock()
 	if n.resizing {
 		n.resizingLock.Unlock()
@@ -424,7 +477,7 @@ func (vlm *DefaultValueLocMap) merge(n *node) {
 	vlm.merge2(n)
 }
 
-func (vlm *DefaultValueLocMap) merge2(n *node) {
+func (vlm *valueLocMap) merge2(n *node) {
 	n.lock.Lock()
 	if n.a == nil {
 		n.lock.Unlock()
@@ -580,8 +633,7 @@ func (vlm *DefaultValueLocMap) merge2(n *node) {
 	n.resizingLock.Unlock()
 }
 
-// Get returns timestamp, blockID, offset, length for keyA, keyB.
-func (vlm *DefaultValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32, uint32) {
+func (vlm *valueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32, uint32) {
 	n := &vlm.roots[keyA>>vlm.rootShift]
 	n.lock.RLock()
 	for {
@@ -635,15 +687,7 @@ func (vlm *DefaultValueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, ui
 	return 0, 0, 0, 0
 }
 
-// Set stores timestamp, blockID, offset, length for keyA, keyB and returns the
-// previous timestamp stored. If a newer item is already stored for keyA, keyB,
-// that newer item is kept. If an item with the same timestamp is already
-// stored, it is usually kept unless evenIfSameTimestamp is set true, in which
-// case the passed in data is kept (useful to update a location that moved from
-// memory to disk, for example). Setting an item to blockID == 0 removes it
-// from the mapping if the timestamp stored is less than (or equal to if
-// evenIfSameTimestamp) the timestamp passed in.
-func (vlm *DefaultValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
+func (vlm *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
 	n := &vlm.roots[keyA>>vlm.rootShift]
 	var pn *node
 	n.lock.RLock()
@@ -812,12 +856,7 @@ func (vlm *DefaultValueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, b
 	return 0
 }
 
-// GatherStats returns the active count, length, and a fmt.Stringer of
-// additional debug information (if debug is true). The inactiveMask will be
-// applied to each item's timestamp to determine if it is active (timestamp &
-// inactiveMask == 0) and to be included in the active count and length
-// returned.
-func (vlm *DefaultValueLocMap) GatherStats(inactiveMask uint64, debug bool) (uint64, uint64, fmt.Stringer) {
+func (vlm *valueLocMap) GatherStats(inactiveMask uint64, debug bool) (uint64, uint64, fmt.Stringer) {
 	s := &stats{
 		inactiveMask:      inactiveMask,
 		statsDebug:        debug,
@@ -839,7 +878,7 @@ func (vlm *DefaultValueLocMap) GatherStats(inactiveMask uint64, debug bool) (uin
 }
 
 // Will call n.lock.RUnlock()
-func (vlm *DefaultValueLocMap) gatherStats(s *stats, n *node, depth int) {
+func (vlm *valueLocMap) gatherStats(s *stats, n *node, depth int) {
 	if s.statsDebug {
 		s.nodes++
 		for len(s.depthCounts) <= depth {
@@ -921,9 +960,7 @@ func (vlm *DefaultValueLocMap) gatherStats(s *stats, n *node, depth int) {
 	}
 }
 
-// Discard removes any items in the start:stop (inclusive) range whose
-// timestamp & mask != 0.
-func (vlm *DefaultValueLocMap) Discard(start uint64, stop uint64, mask uint64) {
+func (vlm *valueLocMap) Discard(start uint64, stop uint64, mask uint64) {
 	for i := 0; i < len(vlm.roots); i++ {
 		n := &vlm.roots[i]
 		n.lock.RLock() // Will be released by discard
@@ -932,7 +969,7 @@ func (vlm *DefaultValueLocMap) Discard(start uint64, stop uint64, mask uint64) {
 }
 
 // Will call n.lock.RUnlock()
-func (vlm *DefaultValueLocMap) discard(start uint64, stop uint64, mask uint64, n *node) {
+func (vlm *valueLocMap) discard(start uint64, stop uint64, mask uint64, n *node) {
 	if start > n.rangeStop || stop < n.rangeStart {
 		n.lock.RUnlock()
 		return
@@ -1014,9 +1051,7 @@ func (vlm *DefaultValueLocMap) discard(start uint64, stop uint64, mask uint64, n
 	n.lock.RUnlock()
 }
 
-// ScanCount returns the number of items in the start:stop range; if the count
-// exceeds the max given, counting will stop and a value >= max returned.
-func (vlm *DefaultValueLocMap) ScanCount(start uint64, stop uint64, max uint64) uint64 {
+func (vlm *valueLocMap) ScanCount(start uint64, stop uint64, max uint64) uint64 {
 	var c uint64
 	for i := 0; i < len(vlm.roots); i++ {
 		n := &vlm.roots[i]
@@ -1027,7 +1062,7 @@ func (vlm *DefaultValueLocMap) ScanCount(start uint64, stop uint64, max uint64) 
 }
 
 // Will call n.lock.RUnlock()
-func (vlm *DefaultValueLocMap) scanCount(start uint64, stop uint64, max uint64, n *node) uint64 {
+func (vlm *valueLocMap) scanCount(start uint64, stop uint64, max uint64, n *node) uint64 {
 	if start > n.rangeStop || stop < n.rangeStart {
 		n.lock.RUnlock()
 		return 0
@@ -1081,8 +1116,7 @@ func (vlm *DefaultValueLocMap) scanCount(start uint64, stop uint64, max uint64, 
 	}
 }
 
-// ScanCallback calls the callback for each item within the start:stop range.
-func (vlm *DefaultValueLocMap) ScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) {
+func (vlm *valueLocMap) DeprecatedScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) {
 	for i := 0; i < len(vlm.roots); i++ {
 		n := &vlm.roots[i]
 		n.lock.RLock() // Will be released by scanCallback
@@ -1091,7 +1125,7 @@ func (vlm *DefaultValueLocMap) ScanCallback(start uint64, stop uint64, callback 
 }
 
 // Will call n.lock.RUnlock()
-func (vlm *DefaultValueLocMap) scanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32), n *node) {
+func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32), n *node) {
 	if start > n.rangeStop || stop < n.rangeStart {
 		n.lock.RUnlock()
 		return
@@ -1163,29 +1197,7 @@ func (vlm *DefaultValueLocMap) scanCallback(start uint64, stop uint64, callback 
 	}
 }
 
-// ScanCallbackV2 calls the callback for each item within the start:stop range
-// (inclusive) whose timestamp & mask != 0 || mask == 0,
-// timestamp & notMask == 0, and timestamp <= cutoff, up to max times; it will
-// return the keyA value the scan stopped and more will be true if there are
-// possibly more items but max was reached.
-//
-// Note that callbacks may have been made with keys that were greater than or
-// equal to where the scan indicated it had stopped (reached the max). This is
-// because the callbacks are made as items are encountered while walking the
-// structure and the structure is not 100% in key order. The items are grouped
-// and the groups are in key order, but the items in each group are not. The
-// max, if reached, will likely be reached in the middle of a group. This means
-// that items may be duplicated in a subsequent scan that begins where a
-// previous scan indicated it stopped.
-//
-// In practice with valuestore this hasn't been an issue yet. Discard passes
-// don't duplicate because the same keys won't match the modified mask from the
-// previous pass. Outgoing pull replication passes just end up with some
-// additional keys placed in the bloom filter resulting in slightly higher
-// false positive rates (corrected for with subsequent iterations). Outgoing
-// push replication passes end up sending duplicate information, wasting a bit
-// of bandwidth.
-func (vlm *DefaultValueLocMap) ScanCallbackV2(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) (uint64, bool) {
+func (vlm *valueLocMap) ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) (uint64, bool) {
 	var stopped uint64
 	var more bool
 	for i := 0; i < len(vlm.roots); i++ {
@@ -1200,7 +1212,7 @@ func (vlm *DefaultValueLocMap) ScanCallbackV2(start uint64, stop uint64, mask ui
 }
 
 // Will call n.lock.RUnlock()
-func (vlm *DefaultValueLocMap) scanCallbackV2(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32), n *node) (uint64, uint64, bool) {
+func (vlm *valueLocMap) scanCallbackV2(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32), n *node) (uint64, uint64, bool) {
 	if start > n.rangeStop || stop < n.rangeStart {
 		n.lock.RUnlock()
 		return max, stop, false

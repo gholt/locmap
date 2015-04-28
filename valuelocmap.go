@@ -82,7 +82,6 @@ type ValueLocMap interface {
 	// subsequent iterations). Outgoing push replication passes end up sending
 	// duplicate information, wasting a bit of bandwidth.
 	ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) (stopped uint64, more bool)
-	DeprecatedScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32))
 }
 
 type config struct {
@@ -1113,87 +1112,6 @@ func (vlm *valueLocMap) scanCount(start uint64, stop uint64, max uint64, n *node
 		}
 		n.lock.RUnlock()
 		return c
-	}
-}
-
-func (vlm *valueLocMap) DeprecatedScanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) {
-	for i := 0; i < len(vlm.roots); i++ {
-		n := &vlm.roots[i]
-		n.lock.RLock() // Will be released by scanCallback
-		vlm.scanCallback(start, stop, callback, n)
-	}
-}
-
-// Will call n.lock.RUnlock()
-func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32), n *node) {
-	if start > n.rangeStop || stop < n.rangeStart {
-		n.lock.RUnlock()
-		return
-	}
-	if n.a != nil {
-		n.a.lock.RLock() // Will be released by scanCallback
-		n.lock.RUnlock()
-		vlm.scanCallback(start, stop, callback, n.a)
-		n.lock.RLock()
-		if n.b != nil {
-			n.b.lock.RLock() // Will be released by scanCallback
-			n.lock.RUnlock()
-			vlm.scanCallback(start, stop, callback, n.b)
-		}
-	} else if n.used == 0 {
-		n.lock.RUnlock()
-	} else if start <= n.rangeStart && stop >= n.rangeStop {
-		b := vlm.bits
-		lm := vlm.lowMask
-		es := n.entries
-		ol := &n.overflowLock
-		for i := uint32(0); i <= lm; i++ {
-			e := &es[i]
-			l := &n.entriesLocks[i&vlm.entriesLockMask]
-			l.RLock()
-			if e.blockID == 0 {
-				l.RUnlock()
-				continue
-			}
-			for {
-				callback(e.keyA, e.keyB, e.timestamp, e.length)
-				if e.next == 0 {
-					break
-				}
-				ol.RLock()
-				e = &n.overflow[e.next>>b][e.next&lm]
-				ol.RUnlock()
-			}
-			l.RUnlock()
-		}
-		n.lock.RUnlock()
-	} else {
-		b := vlm.bits
-		lm := vlm.lowMask
-		es := n.entries
-		ol := &n.overflowLock
-		for i := uint32(0); i <= lm; i++ {
-			e := &es[i]
-			l := &n.entriesLocks[i&vlm.entriesLockMask]
-			l.RLock()
-			if e.blockID == 0 {
-				l.RUnlock()
-				continue
-			}
-			for {
-				if e.keyA >= start && e.keyA <= stop {
-					callback(e.keyA, e.keyB, e.timestamp, e.length)
-				}
-				if e.next == 0 {
-					break
-				}
-				ol.RLock()
-				e = &n.overflow[e.next>>b][e.next&lm]
-				ol.RUnlock()
-			}
-			l.RUnlock()
-		}
-		n.lock.RUnlock()
 	}
 }
 

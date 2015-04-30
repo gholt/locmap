@@ -150,8 +150,10 @@ func OptList(opts ...func(*config)) []func(*config) {
 }
 
 // OptWorkers indicates how many workers may be in use (for calculating the
-// number of locks to create, for example). Defaults to env
-// VALUELOCMAP_WORKERS, VALUESTORE_WORKERS, or GOMAXPROCS.
+// number of locks to create, for example). Note that the valuelocmap itself
+// does not create any goroutines itself, but is written to allow concurrent
+// access. Defaults to env VALUELOCMAP_WORKERS, VALUESTORE_WORKERS, or
+// GOMAXPROCS.
 func OptWorkers(count int) func(*config) {
 	return func(cfg *config) {
 		cfg.workers = count
@@ -194,16 +196,6 @@ type valueLocMap struct {
 	roots           []node
 }
 
-type entry struct {
-	keyA      uint64
-	keyB      uint64
-	timestamp uint64
-	blockID   uint32
-	offset    uint32
-	length    uint32
-	next      uint32
-}
-
 type node struct {
 	resizingLock       sync.Mutex
 	resizing           bool
@@ -223,24 +215,14 @@ type node struct {
 	used               uint32
 }
 
-type stats struct {
-	inactiveMask      uint64
-	statsDebug        bool
-	workers           uint32
-	roots             uint32
-	usedRoots         uint32
-	entryPageSize     uint64
-	entryLockPageSize uint64
-	splitLevel        uint32
-	nodes             uint64
-	depthCounts       []uint64
-	allocedEntries    uint64
-	allocedInOverflow uint64
-	usedEntries       uint64
-	usedInOverflow    uint64
-	inactive          uint64
-	active            uint64
-	length            uint64
+type entry struct {
+	keyA      uint64
+	keyB      uint64
+	timestamp uint64
+	blockID   uint32
+	offset    uint32
+	length    uint32
+	next      uint32
 }
 
 // New returns a new ValueLocMap instance using the options given.
@@ -299,10 +281,6 @@ func (vlm *valueLocMap) split(n *node) {
 	}
 	n.resizing = true
 	n.resizingLock.Unlock()
-	vlm.split2(n)
-}
-
-func (vlm *valueLocMap) split2(n *node) {
 	n.lock.Lock()
 	u := atomic.LoadUint32(&n.used)
 	if n.a != nil || u < n.splitLevel {
@@ -469,10 +447,6 @@ func (vlm *valueLocMap) merge(n *node) {
 	}
 	n.resizing = true
 	n.resizingLock.Unlock()
-	vlm.merge2(n)
-}
-
-func (vlm *valueLocMap) merge2(n *node) {
 	n.lock.Lock()
 	if n.a == nil {
 		n.lock.Unlock()
@@ -851,110 +825,6 @@ func (vlm *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 	return 0
 }
 
-func (vlm *valueLocMap) GatherStats(inactiveMask uint64, debug bool) (uint64, uint64, fmt.Stringer) {
-	s := &stats{
-		inactiveMask:      inactiveMask,
-		statsDebug:        debug,
-		workers:           vlm.workers,
-		roots:             uint32(len(vlm.roots)),
-		entryPageSize:     uint64(vlm.lowMask) + 1,
-		entryLockPageSize: uint64(vlm.entriesLockMask) + 1,
-		splitLevel:        uint32(vlm.splitLevel),
-	}
-	for i := uint32(0); i < s.roots; i++ {
-		n := &vlm.roots[i]
-		n.lock.RLock() // Will be released by gatherStats
-		if s.statsDebug && (n.a != nil || n.entries != nil) {
-			s.usedRoots++
-		}
-		vlm.gatherStats(s, n, 0)
-	}
-	return s.active, s.length, s
-}
-
-// Will call n.lock.RUnlock()
-func (vlm *valueLocMap) gatherStats(s *stats, n *node, depth int) {
-	if s.statsDebug {
-		s.nodes++
-		for len(s.depthCounts) <= depth {
-			s.depthCounts = append(s.depthCounts, 0)
-		}
-		s.depthCounts[depth]++
-	}
-	if n.a != nil {
-		n.a.lock.RLock() // Will be released by gatherStats
-		n.lock.RUnlock()
-		vlm.gatherStats(s, n.a, depth+1)
-		n.lock.RLock()
-		if n.b != nil {
-			n.b.lock.RLock() // Will be released by gatherStats
-			n.lock.RUnlock()
-			vlm.gatherStats(s, n.b, depth+1)
-		}
-	} else if n.used == 0 {
-		if s.statsDebug {
-			s.allocedEntries += uint64(len(n.entries))
-			n.overflowLock.RLock()
-			for _, o := range n.overflow {
-				s.allocedEntries += uint64(len(o))
-				s.allocedInOverflow += uint64(len(o))
-			}
-			n.overflowLock.RUnlock()
-		}
-		n.lock.RUnlock()
-	} else {
-		if s.statsDebug {
-			s.allocedEntries += uint64(len(n.entries))
-			n.overflowLock.RLock()
-			for _, o := range n.overflow {
-				s.allocedEntries += uint64(len(o))
-				s.allocedInOverflow += uint64(len(o))
-			}
-			n.overflowLock.RUnlock()
-		}
-		b := vlm.bits
-		lm := vlm.lowMask
-		es := n.entries
-		ol := &n.overflowLock
-		for i := uint32(0); i <= lm; i++ {
-			e := &es[i]
-			l := &n.entriesLocks[i&vlm.entriesLockMask]
-			o := false
-			l.RLock()
-			if e.blockID == 0 {
-				l.RUnlock()
-				continue
-			}
-			for {
-				if s.statsDebug {
-					s.usedEntries++
-					if o {
-						s.usedInOverflow++
-					}
-					if e.timestamp&s.inactiveMask == 0 {
-						s.active++
-						s.length += uint64(e.length)
-					} else {
-						s.inactive++
-					}
-				} else if e.timestamp&s.inactiveMask == 0 {
-					s.active++
-					s.length += uint64(e.length)
-				}
-				if e.next == 0 {
-					break
-				}
-				ol.RLock()
-				e = &n.overflow[e.next>>b][e.next&lm]
-				ol.RUnlock()
-				o = true
-			}
-			l.RUnlock()
-		}
-		n.lock.RUnlock()
-	}
-}
-
 func (vlm *valueLocMap) Discard(start uint64, stop uint64, mask uint64) {
 	for i := 0; i < len(vlm.roots); i++ {
 		n := &vlm.roots[i]
@@ -1158,6 +1028,130 @@ func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, not
 	}
 	n.lock.RUnlock()
 	return max, stopped, more
+}
+
+type stats struct {
+	inactiveMask      uint64
+	statsDebug        bool
+	workers           uint32
+	roots             uint32
+	usedRoots         uint32
+	entryPageSize     uint64
+	entryLockPageSize uint64
+	splitLevel        uint32
+	nodes             uint64
+	depthCounts       []uint64
+	allocedEntries    uint64
+	allocedInOverflow uint64
+	usedEntries       uint64
+	usedInOverflow    uint64
+	inactive          uint64
+	active            uint64
+	length            uint64
+}
+
+func (vlm *valueLocMap) GatherStats(inactiveMask uint64, debug bool) (uint64, uint64, fmt.Stringer) {
+	s := &stats{
+		inactiveMask:      inactiveMask,
+		statsDebug:        debug,
+		workers:           vlm.workers,
+		roots:             uint32(len(vlm.roots)),
+		entryPageSize:     uint64(vlm.lowMask) + 1,
+		entryLockPageSize: uint64(vlm.entriesLockMask) + 1,
+		splitLevel:        uint32(vlm.splitLevel),
+	}
+	for i := uint32(0); i < s.roots; i++ {
+		n := &vlm.roots[i]
+		n.lock.RLock() // Will be released by gatherStats
+		if s.statsDebug && (n.a != nil || n.entries != nil) {
+			s.usedRoots++
+		}
+		vlm.gatherStats(s, n, 0)
+	}
+	return s.active, s.length, s
+}
+
+// Will call n.lock.RUnlock()
+func (vlm *valueLocMap) gatherStats(s *stats, n *node, depth int) {
+	if s.statsDebug {
+		s.nodes++
+		for len(s.depthCounts) <= depth {
+			s.depthCounts = append(s.depthCounts, 0)
+		}
+		s.depthCounts[depth]++
+	}
+	if n.a != nil {
+		n.a.lock.RLock() // Will be released by gatherStats
+		n.lock.RUnlock()
+		vlm.gatherStats(s, n.a, depth+1)
+		n.lock.RLock()
+		if n.b != nil {
+			n.b.lock.RLock() // Will be released by gatherStats
+			n.lock.RUnlock()
+			vlm.gatherStats(s, n.b, depth+1)
+		}
+	} else if n.used == 0 {
+		if s.statsDebug {
+			s.allocedEntries += uint64(len(n.entries))
+			n.overflowLock.RLock()
+			for _, o := range n.overflow {
+				s.allocedEntries += uint64(len(o))
+				s.allocedInOverflow += uint64(len(o))
+			}
+			n.overflowLock.RUnlock()
+		}
+		n.lock.RUnlock()
+	} else {
+		if s.statsDebug {
+			s.allocedEntries += uint64(len(n.entries))
+			n.overflowLock.RLock()
+			for _, o := range n.overflow {
+				s.allocedEntries += uint64(len(o))
+				s.allocedInOverflow += uint64(len(o))
+			}
+			n.overflowLock.RUnlock()
+		}
+		b := vlm.bits
+		lm := vlm.lowMask
+		es := n.entries
+		ol := &n.overflowLock
+		for i := uint32(0); i <= lm; i++ {
+			e := &es[i]
+			l := &n.entriesLocks[i&vlm.entriesLockMask]
+			o := false
+			l.RLock()
+			if e.blockID == 0 {
+				l.RUnlock()
+				continue
+			}
+			for {
+				if s.statsDebug {
+					s.usedEntries++
+					if o {
+						s.usedInOverflow++
+					}
+					if e.timestamp&s.inactiveMask == 0 {
+						s.active++
+						s.length += uint64(e.length)
+					} else {
+						s.inactive++
+					}
+				} else if e.timestamp&s.inactiveMask == 0 {
+					s.active++
+					s.length += uint64(e.length)
+				}
+				if e.next == 0 {
+					break
+				}
+				ol.RLock()
+				e = &n.overflow[e.next>>b][e.next&lm]
+				ol.RUnlock()
+				o = true
+			}
+			l.RUnlock()
+		}
+		n.lock.RUnlock()
+	}
 }
 
 func (s *stats) String() string {

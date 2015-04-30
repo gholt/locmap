@@ -55,10 +55,6 @@ type ValueLocMap interface {
 	// Discard removes any items in the start:stop (inclusive) range whose
 	// timestamp & mask != 0.
 	Discard(start uint64, stop uint64, mask uint64)
-	// ScanCount returns the number of items in the start:stop range; if the
-	// count exceeds the max given, counting will stop and a value >= max
-	// returned.
-	ScanCount(start uint64, stop uint64, max uint64) uint64
 	// ScanCallback calls the callback for each item within the start:stop
 	// range (inclusive) whose timestamp & mask != 0 || mask == 0, timestamp &
 	// notMask == 0, and timestamp <= cutoff, up to max times; it will return
@@ -1050,78 +1046,13 @@ func (vlm *valueLocMap) discard(start uint64, stop uint64, mask uint64, n *node)
 	n.lock.RUnlock()
 }
 
-func (vlm *valueLocMap) ScanCount(start uint64, stop uint64, max uint64) uint64 {
-	var c uint64
-	for i := 0; i < len(vlm.roots); i++ {
-		n := &vlm.roots[i]
-		n.lock.RLock() // Will be released by scanCount
-		c += vlm.scanCount(start, stop, max, n)
-	}
-	return c
-}
-
-// Will call n.lock.RUnlock()
-func (vlm *valueLocMap) scanCount(start uint64, stop uint64, max uint64, n *node) uint64 {
-	if start > n.rangeStop || stop < n.rangeStart {
-		n.lock.RUnlock()
-		return 0
-	}
-	if n.a != nil {
-		n.a.lock.RLock() // Will be released by scanCount
-		n.lock.RUnlock()
-		c := vlm.scanCount(start, stop, max, n.a)
-		n.lock.RLock()
-		if n.b != nil {
-			n.b.lock.RLock() // Will be released by scanCount
-			n.lock.RUnlock()
-			c += vlm.scanCount(start, stop, max, n.b)
-		}
-		return c
-	} else if n.used == 0 {
-		n.lock.RUnlock()
-		return 0
-	} else if start <= n.rangeStart && stop >= n.rangeStop {
-		n.lock.RUnlock()
-		return uint64(atomic.LoadUint32(&n.used))
-	} else {
-		var c uint64
-		b := vlm.bits
-		lm := vlm.lowMask
-		es := n.entries
-		ol := &n.overflowLock
-		for i := uint32(0); i <= lm; i++ {
-			e := &es[i]
-			l := &n.entriesLocks[i&vlm.entriesLockMask]
-			l.RLock()
-			if e.blockID == 0 {
-				l.RUnlock()
-				continue
-			}
-			for {
-				if e.keyA >= start && e.keyA <= stop {
-					c++
-				}
-				if e.next == 0 {
-					break
-				}
-				ol.RLock()
-				e = &n.overflow[e.next>>b][e.next&lm]
-				ol.RUnlock()
-			}
-			l.RUnlock()
-		}
-		n.lock.RUnlock()
-		return c
-	}
-}
-
 func (vlm *valueLocMap) ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) (uint64, bool) {
 	var stopped uint64
 	var more bool
 	for i := 0; i < len(vlm.roots); i++ {
 		n := &vlm.roots[i]
-		n.lock.RLock() // Will be released by scanCallbackV2
-		max, stopped, more = vlm.scanCallbackV2(start, stop, mask, notMask, cutoff, max, callback, n)
+		n.lock.RLock() // Will be released by scanCallback
+		max, stopped, more = vlm.scanCallback(start, stop, mask, notMask, cutoff, max, callback, n)
 		if more {
 			break
 		}
@@ -1130,7 +1061,7 @@ func (vlm *valueLocMap) ScanCallback(start uint64, stop uint64, mask uint64, not
 }
 
 // Will call n.lock.RUnlock()
-func (vlm *valueLocMap) scanCallbackV2(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32), n *node) (uint64, uint64, bool) {
+func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32), n *node) (uint64, uint64, bool) {
 	if start > n.rangeStop || stop < n.rangeStart {
 		n.lock.RUnlock()
 		return max, stop, false
@@ -1138,15 +1069,15 @@ func (vlm *valueLocMap) scanCallbackV2(start uint64, stop uint64, mask uint64, n
 	if n.a != nil {
 		var stopped uint64
 		var more bool
-		n.a.lock.RLock() // Will be released by scanCallbackV2
+		n.a.lock.RLock() // Will be released by scanCallback
 		n.lock.RUnlock()
-		max, stopped, more = vlm.scanCallbackV2(start, stop, mask, notMask, cutoff, max, callback, n.a)
+		max, stopped, more = vlm.scanCallback(start, stop, mask, notMask, cutoff, max, callback, n.a)
 		if !more {
 			n.lock.RLock()
 			if n.b != nil {
-				n.b.lock.RLock() // Will be released by scanCallbackV2
+				n.b.lock.RLock() // Will be released by scanCallback
 				n.lock.RUnlock()
-				max, stopped, more = vlm.scanCallbackV2(start, stop, mask, notMask, cutoff, max, callback, n.b)
+				max, stopped, more = vlm.scanCallback(start, stop, mask, notMask, cutoff, max, callback, n.b)
 			}
 		}
 		return max, stopped, more

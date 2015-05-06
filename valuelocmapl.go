@@ -10,12 +10,12 @@ import (
 	"gopkg.in/gholt/brimtext.v1"
 )
 
-// ValueLocMap is an interface for tracking the mappings
-// from keys to the locations of their values.
-type ValueLocMap interface {
-	// Get returns timestamp, blockID, offset for keyA, keyB.
-	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint32, offset uint32)
-	// Set stores timestamp, blockID, offset for
+// ValueLocMapL is an interface for tracking the mappings
+// from keys to the locations of their values.This implementation also // tracks a length value for each key.
+type ValueLocMapL interface {
+	// Get returns timestamp, blockID, offset, length for keyA, keyB.
+	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint32, offset uint32, length uint32)
+	// Set stores timestamp, blockID, offset, length for
 	// keyA, keyB and returns the previous timestamp stored. If a newer item is
 	// already stored for keyA, keyB, that newer item is kept. If an item with
 	// the same timestamp is already stored, it is usually kept unless
@@ -24,13 +24,13 @@ type ValueLocMap interface {
 	// example). Setting an item to blockID == 0 removes it from the mapping if
 	// the timestamp stored is less than (or equal to if evenIfSameTimestamp)
 	// the timestamp passed in.
-	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
-	// GatherStats returns the active count and a
+	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
+	// GatherStats returns the active count, length, and a
 	// fmt.Stringer of additional debug information (if debug is true). The
 	// inactiveMask will be applied to each item's timestamp to determine if it
 	// is active (timestamp & inactiveMask == 0) and to be included in the
-	// active count returned.
-	GatherStats(inactiveMask uint64, debug bool) (count uint64, debugInfo fmt.Stringer)
+	// active count and length returned.
+	GatherStats(inactiveMask uint64, debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
 	// Discard removes any items in the start:stop (inclusive) range whose
 	// timestamp & mask != 0.
 	Discard(start uint64, stop uint64, mask uint64)
@@ -56,20 +56,20 @@ type ValueLocMap interface {
 	// resulting in slightly higher false positive rates (corrected for with
 	// subsequent iterations). Outgoing push replication passes end up sending
 	// duplicate information, wasting a bit of bandwidth.
-	ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64)) (stopped uint64, more bool)
+	ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) (stopped uint64, more bool)
 }
 
-type valueLocMap struct {
+type valueLocMapL struct {
 	bits            uint32
 	lowMask         uint32
 	entriesLockMask uint32
 	workers         uint32
 	splitLevel      uint32
 	rootShift       uint64
-	roots           []node
+	roots           []nodeL
 }
 
-type node struct {
+type nodeL struct {
 	resizingLock       sync.Mutex
 	resizing           bool
 	lock               sync.RWMutex
@@ -78,27 +78,27 @@ type node struct {
 	rangeStop          uint64
 	splitLevel         uint32
 	mergeLevel         uint32
-	a                  *node
-	b                  *node
-	entries            []entry
+	a                  *nodeL
+	b                  *nodeL
+	entries            []entryL
 	entriesLocks       []sync.RWMutex
-	overflow           [][]entry
+	overflow           [][]entryL
 	overflowLowestFree uint32
 	overflowLock       sync.RWMutex
 	used               uint32
 }
 
-type entry struct {
+type entryL struct {
 	keyA      uint64
 	keyB      uint64
 	timestamp uint64
 	blockID   uint32
 	offset    uint32
-
-	next uint32
+	length    uint32
+	next      uint32
 }
 
-// New returns a new ValueLocMap  instance using the options given.
+// NewL returns a new ValueLocMapL  instance using the options given.
 //
 // You can provide Opt* functions for the optional configuration items, such as
 // OptWorkers:
@@ -113,10 +113,10 @@ type entry struct {
 //      opts = append(opts, valuelocmap.OptWorkers(commandLineOptionValue))
 //  }
 //  vlmWithOptionsBuiltUp := valuelocmap.New(opts...)
-func New(opts ...func(*config)) ValueLocMap {
+func NewL(opts ...func(*config)) ValueLocMapL {
 	cfg := resolveConfig(opts...)
-	vlm := &valueLocMap{workers: uint32(cfg.workers)}
-	est := uint32(cfg.pageSize / int(unsafe.Sizeof(entry{})))
+	vlm := &valueLocMapL{workers: uint32(cfg.workers)}
+	est := uint32(cfg.pageSize / int(unsafe.Sizeof(entryL{})))
 	if est < 4 {
 		est = 4
 	}
@@ -135,7 +135,7 @@ func New(opts ...func(*config)) ValueLocMap {
 	}
 	vlm.entriesLockMask = c - 1
 	vlm.splitLevel = uint32(float64(uint32(1<<vlm.bits)) * cfg.splitMultiplier)
-	vlm.roots = make([]node, c)
+	vlm.roots = make([]nodeL, c)
 	for i := 0; i < len(vlm.roots); i++ {
 		vlm.roots[i].highMask = uint64(1) << (vlm.rootShift - 1)
 		vlm.roots[i].rangeStart = uint64(i) << vlm.rootShift
@@ -146,7 +146,7 @@ func New(opts ...func(*config)) ValueLocMap {
 	return vlm
 }
 
-func (vlm *valueLocMap) split(n *node) {
+func (vlm *valueLocMapL) split(n *nodeL) {
 	n.resizingLock.Lock()
 	if n.resizing {
 		n.resizingLock.Unlock()
@@ -164,7 +164,7 @@ func (vlm *valueLocMap) split(n *node) {
 		return
 	}
 	hm := n.highMask
-	an := &node{
+	an := &nodeL{
 		highMask:           hm >> 1,
 		rangeStart:         n.rangeStart,
 		rangeStop:          hm - 1 + n.rangeStart,
@@ -176,13 +176,13 @@ func (vlm *valueLocMap) split(n *node) {
 		overflowLowestFree: n.overflowLowestFree,
 		used:               n.used,
 	}
-	bn := &node{
+	bn := &nodeL{
 		highMask:     hm >> 1,
 		rangeStart:   hm + n.rangeStart,
 		rangeStop:    n.rangeStop,
 		splitLevel:   uint32(float64(vlm.splitLevel) + (rand.Float64()-.5)/5*float64(vlm.splitLevel)),
 		mergeLevel:   uint32(rand.Float64() / 10 * float64(vlm.splitLevel)),
-		entries:      make([]entry, len(n.entries)),
+		entries:      make([]entryL, len(n.entries)),
 		entriesLocks: make([]sync.RWMutex, len(n.entriesLocks)),
 	}
 	n.a = an
@@ -225,7 +225,7 @@ func (vlm *valueLocMap) split(n *node) {
 						bn.overflowLowestFree = 0
 					}
 				} else {
-					bo = append(bo, make([]entry, 1<<b))
+					bo = append(bo, make([]entryL, 1<<b))
 					bn.overflow = bo
 					if boc == 0 {
 						be2 := &bo[0][1]
@@ -274,7 +274,7 @@ func (vlm *valueLocMap) split(n *node) {
 					bn.overflowLowestFree = 0
 				}
 			} else {
-				bo = append(bo, make([]entry, 1<<b))
+				bo = append(bo, make([]entryL, 1<<b))
 				bn.overflow = bo
 				if boc == 0 {
 					be2 := &bo[0][1]
@@ -312,7 +312,7 @@ func (vlm *valueLocMap) split(n *node) {
 	n.resizingLock.Unlock()
 }
 
-func (vlm *valueLocMap) merge(n *node) {
+func (vlm *valueLocMapL) merge(n *nodeL) {
 	n.resizingLock.Lock()
 	if n.resizing {
 		n.resizingLock.Unlock()
@@ -429,7 +429,7 @@ func (vlm *valueLocMap) merge(n *node) {
 						}
 					}
 				} else {
-					ao = append(ao, make([]entry, 1<<b))
+					ao = append(ao, make([]entryL, 1<<b))
 					an.overflow = ao
 					if aoc == 0 {
 						ae2 := &ao[0][1]
@@ -475,14 +475,14 @@ func (vlm *valueLocMap) merge(n *node) {
 	n.resizingLock.Unlock()
 }
 
-func (vlm *valueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32) {
+func (vlm *valueLocMapL) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32, uint32) {
 	n := &vlm.roots[keyA>>vlm.rootShift]
 	n.lock.RLock()
 	for {
 		if n.a == nil {
 			if n.entries == nil {
 				n.lock.RUnlock()
-				return 0, 0, 0
+				return 0, 0, 0, 0
 			}
 			break
 		}
@@ -505,17 +505,17 @@ func (vlm *valueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32) {
 	if e.blockID == 0 {
 		l.RUnlock()
 		n.lock.RUnlock()
-		return 0, 0, 0
+		return 0, 0, 0, 0
 	}
 	for {
 		if e.keyA == keyA && e.keyB == keyB {
 			rt := e.timestamp
 			rb := e.blockID
 			ro := e.offset
-
+			rl := e.length
 			l.RUnlock()
 			n.lock.RUnlock()
-			return rt, rb, ro
+			return rt, rb, ro, rl
 		}
 		if e.next == 0 {
 			break
@@ -526,12 +526,12 @@ func (vlm *valueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32) {
 	}
 	l.RUnlock()
 	n.lock.RUnlock()
-	return 0, 0, 0
+	return 0, 0, 0, 0
 }
 
-func (vlm *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, evenIfSameTimestamp bool) uint64 {
+func (vlm *valueLocMapL) Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
 	n := &vlm.roots[keyA>>vlm.rootShift]
-	var pn *node
+	var pn *nodeL
 	n.lock.RLock()
 	for {
 		if n.a == nil {
@@ -541,7 +541,7 @@ func (vlm *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 			n.lock.RUnlock()
 			n.lock.Lock()
 			if n.entries == nil {
-				n.entries = make([]entry, 1<<vlm.bits)
+				n.entries = make([]entryL, 1<<vlm.bits)
 				n.entriesLocks = make([]sync.RWMutex, vlm.entriesLockMask+1)
 			}
 			n.lock.Unlock()
@@ -563,7 +563,7 @@ func (vlm *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 	l := &n.entriesLocks[i&vlm.entriesLockMask]
 	ol := &n.overflowLock
 	e := &n.entries[i]
-	var ep *entry
+	var ep *entryL
 	l.Lock()
 	if e.blockID != 0 {
 		var f uint32
@@ -579,7 +579,7 @@ func (vlm *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 					e.timestamp = timestamp
 					e.blockID = blockID
 					e.offset = offset
-
+					e.length = length
 					l.Unlock()
 					n.lock.RUnlock()
 					return t
@@ -640,7 +640,7 @@ func (vlm *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 		e.timestamp = timestamp
 		e.blockID = blockID
 		e.offset = offset
-
+		e.length = length
 	} else {
 		ol.Lock()
 		o := n.overflow
@@ -668,7 +668,7 @@ func (vlm *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 				}
 			}
 		} else {
-			n.overflow = append(n.overflow, make([]entry, 1<<b))
+			n.overflow = append(n.overflow, make([]entryL, 1<<b))
 			if oc == 0 {
 				e = &n.overflow[0][1]
 				e.next = n.entries[i].next
@@ -686,7 +686,7 @@ func (vlm *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 		e.timestamp = timestamp
 		e.blockID = blockID
 		e.offset = offset
-
+		e.length = length
 		ol.Unlock()
 	}
 	u := atomic.AddUint32(&n.used, 1)
@@ -698,7 +698,7 @@ func (vlm *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 	return 0
 }
 
-func (vlm *valueLocMap) Discard(start uint64, stop uint64, mask uint64) {
+func (vlm *valueLocMapL) Discard(start uint64, stop uint64, mask uint64) {
 	for i := 0; i < len(vlm.roots); i++ {
 		n := &vlm.roots[i]
 		n.lock.RLock() // Will be released by discard
@@ -707,7 +707,7 @@ func (vlm *valueLocMap) Discard(start uint64, stop uint64, mask uint64) {
 }
 
 // Will call n.lock.RUnlock()
-func (vlm *valueLocMap) discard(start uint64, stop uint64, mask uint64, n *node) {
+func (vlm *valueLocMapL) discard(start uint64, stop uint64, mask uint64, n *nodeL) {
 	if start > n.rangeStop || stop < n.rangeStart {
 		n.lock.RUnlock()
 		return
@@ -740,7 +740,7 @@ func (vlm *valueLocMap) discard(start uint64, stop uint64, mask uint64, n *node)
 			l.Unlock()
 			continue
 		}
-		var p *entry
+		var p *entryL
 		for {
 			if e.keyA >= start && e.keyA <= stop && e.timestamp&mask != 0 {
 				if p == nil {
@@ -789,7 +789,7 @@ func (vlm *valueLocMap) discard(start uint64, stop uint64, mask uint64, n *node)
 	n.lock.RUnlock()
 }
 
-func (vlm *valueLocMap) ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64)) (uint64, bool) {
+func (vlm *valueLocMapL) ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) (uint64, bool) {
 	var stopped uint64
 	var more bool
 	for i := 0; i < len(vlm.roots); i++ {
@@ -804,7 +804,7 @@ func (vlm *valueLocMap) ScanCallback(start uint64, stop uint64, mask uint64, not
 }
 
 // Will call n.lock.RUnlock()
-func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64), n *node) (uint64, uint64, bool) {
+func (vlm *valueLocMapL) scanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32), n *nodeL) (uint64, uint64, bool) {
 	if start > n.rangeStop || stop < n.rangeStart {
 		n.lock.RUnlock()
 		return max, stop, false
@@ -851,7 +851,7 @@ func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, not
 						more = true
 						break
 					}
-					callback(e.keyA, e.keyB, e.timestamp)
+					callback(e.keyA, e.keyB, e.timestamp, e.length)
 					max--
 				}
 				if e.next == 0 {
@@ -887,7 +887,7 @@ func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, not
 					more = true
 					break
 				}
-				callback(e.keyA, e.keyB, e.timestamp)
+				callback(e.keyA, e.keyB, e.timestamp, e.length)
 				max--
 			}
 			if e.next == 0 {
@@ -903,7 +903,7 @@ func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, not
 	return max, stopped, more
 }
 
-type stats struct {
+type statsL struct {
 	inactiveMask      uint64
 	statsDebug        bool
 	workers           uint32
@@ -920,10 +920,11 @@ type stats struct {
 	usedInOverflow    uint64
 	inactive          uint64
 	active            uint64
+	length            uint64
 }
 
-func (vlm *valueLocMap) GatherStats(inactiveMask uint64, debug bool) (uint64, fmt.Stringer) {
-	s := &stats{
+func (vlm *valueLocMapL) GatherStats(inactiveMask uint64, debug bool) (uint64, uint64, fmt.Stringer) {
+	s := &statsL{
 		inactiveMask:      inactiveMask,
 		statsDebug:        debug,
 		workers:           vlm.workers,
@@ -940,11 +941,11 @@ func (vlm *valueLocMap) GatherStats(inactiveMask uint64, debug bool) (uint64, fm
 		}
 		vlm.gatherStats(s, n, 0)
 	}
-	return s.active, s
+	return s.active, s.length, s
 }
 
 // Will call n.lock.RUnlock()
-func (vlm *valueLocMap) gatherStats(s *stats, n *node, depth int) {
+func (vlm *valueLocMapL) gatherStats(s *statsL, n *nodeL, depth int) {
 	if s.statsDebug {
 		s.nodes++
 		for len(s.depthCounts) <= depth {
@@ -1004,13 +1005,13 @@ func (vlm *valueLocMap) gatherStats(s *stats, n *node, depth int) {
 					}
 					if e.timestamp&s.inactiveMask == 0 {
 						s.active++
-
+						s.length += uint64(e.length)
 					} else {
 						s.inactive++
 					}
 				} else if e.timestamp&s.inactiveMask == 0 {
 					s.active++
-
+					s.length += uint64(e.length)
 				}
 				if e.next == 0 {
 					break
@@ -1026,7 +1027,7 @@ func (vlm *valueLocMap) gatherStats(s *stats, n *node, depth int) {
 	}
 }
 
-func (s *stats) String() string {
+func (s *statsL) String() string {
 	if s.statsDebug {
 		depthCounts := fmt.Sprintf("%d", s.depthCounts[0])
 		for i := 1; i < len(s.depthCounts); i++ {
@@ -1035,9 +1036,9 @@ func (s *stats) String() string {
 		return brimtext.Align([][]string{
 			[]string{"inactiveMask", fmt.Sprintf("%016x", s.inactiveMask)},
 			[]string{"workers", fmt.Sprintf("%d", s.workers)},
-			[]string{"roots", fmt.Sprintf("%d (%d bytes)", s.roots, uint64(s.roots)*uint64(unsafe.Sizeof(node{})))},
+			[]string{"roots", fmt.Sprintf("%d (%d bytes)", s.roots, uint64(s.roots)*uint64(unsafe.Sizeof(nodeL{})))},
 			[]string{"usedRoots", fmt.Sprintf("%d", s.usedRoots)},
-			[]string{"entryPageSize", fmt.Sprintf("%d (%d bytes)", s.entryPageSize, uint64(s.entryPageSize)*uint64(unsafe.Sizeof(entry{})))},
+			[]string{"entryPageSize", fmt.Sprintf("%d (%d bytes)", s.entryPageSize, uint64(s.entryPageSize)*uint64(unsafe.Sizeof(entryL{})))},
 			[]string{"entryLockPageSize", fmt.Sprintf("%d (%d bytes)", s.entryLockPageSize, uint64(s.entryLockPageSize)*uint64(unsafe.Sizeof(sync.RWMutex{})))},
 			[]string{"splitLevel", fmt.Sprintf("%d +-10%%", s.splitLevel)},
 			[]string{"nodes", fmt.Sprintf("%d", s.nodes)},
@@ -1049,6 +1050,7 @@ func (s *stats) String() string {
 			[]string{"usedInOverflow", fmt.Sprintf("%d %.1f%%", s.usedInOverflow, 100*float64(s.usedInOverflow)/float64(s.usedEntries))},
 			[]string{"inactive", fmt.Sprintf("%d %.1f%%", s.inactive, 100*float64(s.inactive)/float64(s.usedEntries))},
 			[]string{"active", fmt.Sprintf("%d %.1f%%", s.active, 100*float64(s.active)/float64(s.usedEntries))},
+			[]string{"length", fmt.Sprintf("%d", s.length)},
 		}, nil)
 	} else {
 		return brimtext.Align([][]string{}, nil)

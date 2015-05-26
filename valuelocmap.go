@@ -1,8 +1,30 @@
+// Package valuelocmap provides a concurrency-safe data structure that maps
+// keys to value locations. A key is 128 bits and is specified using two
+// uint64s (keyA, keyB). A value location is specified using a blockID, offset,
+// and length triplet. Each mapping is assigned a timestamp and the greatest
+// timestamp wins.
+//
+// The timestamp usually has some number of the lowest bits in use for state
+// information such as active and inactive entries. For example, the lowest bit
+// might be used as 0 = active, 1 = deletion marker so that deletion events are
+// retained for some time period before being completely removed with Discard.
+// Exactly how many bits are used and what they're used for is outside the
+// scope of the mapping itself.
+//
+// This implementation essentially uses a tree structure of slices of key to
+// location assignments. When a slice fills up, an additional slice is created
+// and half the data is moved to the new slice and the tree structure grows. If
+// a slice empties, it is merged with its pair in the tree structure and the
+// tree shrinks. The tree is balanced by high bits of the key, and locations
+// are distributed in the slices by the low bits.
 package valuelocmap
 
 import (
 	"fmt"
 	"math/rand"
+	"os"
+	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -10,27 +32,26 @@ import (
 	"gopkg.in/gholt/brimtext.v1"
 )
 
-// ValueLocMap is an interface for tracking the mappings
-// from keys to the locations of their values.
+// ValueLocMap is an interface for tracking the mappings from keys to the
+// locations of their values.
 type ValueLocMap interface {
-	// Get returns timestamp, blockID, offset for keyA, keyB.
-	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint32, offset uint32)
-	// Set stores timestamp, blockID, offset for
-	// keyA, keyB and returns the previous timestamp stored. If a newer item is
-	// already stored for keyA, keyB, that newer item is kept. If an item with
-	// the same timestamp is already stored, it is usually kept unless
-	// evenIfSameTimestamp is set true, in which case the passed in data is
-	// kept (useful to update a location that moved from memory to disk, for
-	// example). Setting an item to blockID == 0 removes it from the mapping if
-	// the timestamp stored is less than (or equal to if evenIfSameTimestamp)
-	// the timestamp passed in.
-	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
-	// GatherStats returns the active count and a
-	// fmt.Stringer of additional debug information (if debug is true). The
-	// inactiveMask will be applied to each item's timestamp to determine if it
-	// is active (timestamp & inactiveMask == 0) and to be included in the
-	// active count returned.
-	GatherStats(inactiveMask uint64, debug bool) (count uint64, debugInfo fmt.Stringer)
+	// Get returns timestamp, blockID, offset, length for keyA, keyB.
+	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint32, offset uint32, length uint32)
+	// Set stores timestamp, blockID, offset, length for keyA, keyB and returns
+	// the previous timestamp stored. If a newer item is already stored for
+	// keyA, keyB, that newer item is kept. If an item with the same timestamp
+	// is already stored, it is usually kept unless evenIfSameTimestamp is set
+	// true, in which case the passed in data is kept (useful to update a
+	// location that moved from memory to disk, for example). Setting an item
+	// to blockID == 0 removes it from the mapping if the timestamp stored is
+	// less than (or equal to if evenIfSameTimestamp) the timestamp passed in.
+	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
+	// GatherStats returns the active count, length, and a fmt.Stringer of
+	// additional debug information (if debug is true). The inactiveMask will
+	// be applied to each item's timestamp to determine if it is active
+	// (timestamp & inactiveMask == 0) and to be included in the active count
+	// and length returned.
+	GatherStats(inactiveMask uint64, debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
 	// Discard removes any items in the start:stop (inclusive) range whose
 	// timestamp & mask != 0.
 	Discard(start uint64, stop uint64, mask uint64)
@@ -56,7 +77,113 @@ type ValueLocMap interface {
 	// resulting in slightly higher false positive rates (corrected for with
 	// subsequent iterations). Outgoing push replication passes end up sending
 	// duplicate information, wasting a bit of bandwidth.
-	ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64)) (stopped uint64, more bool)
+	ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) (stopped uint64, more bool)
+}
+
+type config struct {
+	workers         int
+	roots           int
+	pageSize        int
+	splitMultiplier float64
+}
+
+func resolveConfig(opts ...func(*config)) *config {
+	cfg := &config{}
+	if env := os.Getenv("VALUELOCMAP_WORKERS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.workers = val
+		}
+	} else if env = os.Getenv("VALUESTORE_WORKERS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.workers = val
+		}
+	}
+	if cfg.workers <= 0 {
+		cfg.workers = runtime.GOMAXPROCS(0)
+	}
+	if env := os.Getenv("VALUELOCMAP_ROOTS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.roots = val
+		}
+	}
+	if cfg.roots <= 0 {
+		cfg.roots = cfg.workers * cfg.workers
+	}
+	if env := os.Getenv("VALUELOCMAP_PAGESIZE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.pageSize = val
+		}
+	}
+	if cfg.pageSize <= 0 {
+		cfg.pageSize = 1048576
+	}
+	if env := os.Getenv("VALUELOCMAP_SPLITMULTIPLIER"); env != "" {
+		if val, err := strconv.ParseFloat(env, 64); err == nil {
+			cfg.splitMultiplier = val
+		}
+	}
+	if cfg.splitMultiplier <= 0 {
+		cfg.splitMultiplier = 3.0
+	}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	if cfg.workers < 1 {
+		cfg.workers = 1
+	}
+	if cfg.roots < 2 {
+		cfg.roots = 2
+	}
+	if cfg.pageSize < 1 {
+		cfg.pageSize = 1
+	}
+	if cfg.splitMultiplier <= 0 {
+		cfg.splitMultiplier = 0.01
+	}
+	return cfg
+}
+
+// OptList returns a slice with the opts given; useful if you want to possibly
+// append more options to the list before using it with New(list...).
+func OptList(opts ...func(*config)) []func(*config) {
+	return opts
+}
+
+// OptWorkers indicates how many workers may be in use (for calculating the
+// number of locks to create, for example). Note that the valuelocmap itself
+// does not create any goroutines itself, but is written to allow concurrent
+// access. Defaults to env VALUELOCMAP_WORKERS, VALUESTORE_WORKERS, or
+// GOMAXPROCS.
+func OptWorkers(count int) func(*config) {
+	return func(cfg *config) {
+		cfg.workers = count
+	}
+}
+
+// OptRoots indicates how many top level nodes the map should have. More top
+// level nodes means less contention but a bit more memory. Defaults to
+// VALUELOCMAP_ROOTS or the OptWorkers value squared. This will be rounded up
+// to the next power of two.
+func OptRoots(roots int) func(*config) {
+	return func(cfg *config) {
+		cfg.roots = roots
+	}
+}
+
+// OptPageSize controls the size of each chunk of memory allocated. Defaults to
+// env VALUELOCMAP_PAGESIZE or 524,288.
+func OptPageSize(bytes int) func(*config) {
+	return func(cfg *config) {
+		cfg.pageSize = bytes
+	}
+}
+
+// OptSplitMultiplier indicates how full a memory page can get before being
+// split into two pages. Defaults to env VALUELOCMAP_SPLITMULTIPLIER or 3.0.
+func OptSplitMultiplier(multiplier float64) func(*config) {
+	return func(cfg *config) {
+		cfg.splitMultiplier = multiplier
+	}
 }
 
 type valueLocMap struct {
@@ -94,11 +221,11 @@ type entry struct {
 	timestamp uint64
 	blockID   uint32
 	offset    uint32
-
-	next uint32
+	length    uint32
+	next      uint32
 }
 
-// New returns a new ValueLocMap  instance using the options given.
+// New returns a new ValueLocMap instance using the options given.
 //
 // You can provide Opt* functions for the optional configuration items, such as
 // OptWorkers:
@@ -475,14 +602,14 @@ func (vlm *valueLocMap) merge(n *node) {
 	n.resizingLock.Unlock()
 }
 
-func (vlm *valueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32) {
+func (vlm *valueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32, uint32) {
 	n := &vlm.roots[keyA>>vlm.rootShift]
 	n.lock.RLock()
 	for {
 		if n.a == nil {
 			if n.entries == nil {
 				n.lock.RUnlock()
-				return 0, 0, 0
+				return 0, 0, 0, 0
 			}
 			break
 		}
@@ -505,17 +632,17 @@ func (vlm *valueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32) {
 	if e.blockID == 0 {
 		l.RUnlock()
 		n.lock.RUnlock()
-		return 0, 0, 0
+		return 0, 0, 0, 0
 	}
 	for {
 		if e.keyA == keyA && e.keyB == keyB {
 			rt := e.timestamp
 			rb := e.blockID
 			ro := e.offset
-
+			rl := e.length
 			l.RUnlock()
 			n.lock.RUnlock()
-			return rt, rb, ro
+			return rt, rb, ro, rl
 		}
 		if e.next == 0 {
 			break
@@ -526,10 +653,10 @@ func (vlm *valueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32) {
 	}
 	l.RUnlock()
 	n.lock.RUnlock()
-	return 0, 0, 0
+	return 0, 0, 0, 0
 }
 
-func (vlm *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, evenIfSameTimestamp bool) uint64 {
+func (vlm *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
 	n := &vlm.roots[keyA>>vlm.rootShift]
 	var pn *node
 	n.lock.RLock()
@@ -579,7 +706,7 @@ func (vlm *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 					e.timestamp = timestamp
 					e.blockID = blockID
 					e.offset = offset
-
+					e.length = length
 					l.Unlock()
 					n.lock.RUnlock()
 					return t
@@ -640,7 +767,7 @@ func (vlm *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 		e.timestamp = timestamp
 		e.blockID = blockID
 		e.offset = offset
-
+		e.length = length
 	} else {
 		ol.Lock()
 		o := n.overflow
@@ -686,7 +813,7 @@ func (vlm *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 		e.timestamp = timestamp
 		e.blockID = blockID
 		e.offset = offset
-
+		e.length = length
 		ol.Unlock()
 	}
 	u := atomic.AddUint32(&n.used, 1)
@@ -789,7 +916,7 @@ func (vlm *valueLocMap) discard(start uint64, stop uint64, mask uint64, n *node)
 	n.lock.RUnlock()
 }
 
-func (vlm *valueLocMap) ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64)) (uint64, bool) {
+func (vlm *valueLocMap) ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) (uint64, bool) {
 	var stopped uint64
 	var more bool
 	for i := 0; i < len(vlm.roots); i++ {
@@ -804,7 +931,7 @@ func (vlm *valueLocMap) ScanCallback(start uint64, stop uint64, mask uint64, not
 }
 
 // Will call n.lock.RUnlock()
-func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64), n *node) (uint64, uint64, bool) {
+func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32), n *node) (uint64, uint64, bool) {
 	if start > n.rangeStop || stop < n.rangeStart {
 		n.lock.RUnlock()
 		return max, stop, false
@@ -851,7 +978,7 @@ func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, not
 						more = true
 						break
 					}
-					callback(e.keyA, e.keyB, e.timestamp)
+					callback(e.keyA, e.keyB, e.timestamp, e.length)
 					max--
 				}
 				if e.next == 0 {
@@ -887,7 +1014,7 @@ func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, not
 					more = true
 					break
 				}
-				callback(e.keyA, e.keyB, e.timestamp)
+				callback(e.keyA, e.keyB, e.timestamp, e.length)
 				max--
 			}
 			if e.next == 0 {
@@ -920,9 +1047,10 @@ type stats struct {
 	usedInOverflow    uint64
 	inactive          uint64
 	active            uint64
+	length            uint64
 }
 
-func (vlm *valueLocMap) GatherStats(inactiveMask uint64, debug bool) (uint64, fmt.Stringer) {
+func (vlm *valueLocMap) GatherStats(inactiveMask uint64, debug bool) (uint64, uint64, fmt.Stringer) {
 	s := &stats{
 		inactiveMask:      inactiveMask,
 		statsDebug:        debug,
@@ -940,7 +1068,7 @@ func (vlm *valueLocMap) GatherStats(inactiveMask uint64, debug bool) (uint64, fm
 		}
 		vlm.gatherStats(s, n, 0)
 	}
-	return s.active, s
+	return s.active, s.length, s
 }
 
 // Will call n.lock.RUnlock()
@@ -1004,13 +1132,13 @@ func (vlm *valueLocMap) gatherStats(s *stats, n *node, depth int) {
 					}
 					if e.timestamp&s.inactiveMask == 0 {
 						s.active++
-
+						s.length += uint64(e.length)
 					} else {
 						s.inactive++
 					}
 				} else if e.timestamp&s.inactiveMask == 0 {
 					s.active++
-
+					s.length += uint64(e.length)
 				}
 				if e.next == 0 {
 					break
@@ -1049,6 +1177,7 @@ func (s *stats) String() string {
 			[]string{"usedInOverflow", fmt.Sprintf("%d %.1f%%", s.usedInOverflow, 100*float64(s.usedInOverflow)/float64(s.usedEntries))},
 			[]string{"inactive", fmt.Sprintf("%d %.1f%%", s.inactive, 100*float64(s.inactive)/float64(s.usedEntries))},
 			[]string{"active", fmt.Sprintf("%d %.1f%%", s.active, 100*float64(s.active)/float64(s.usedEntries))},
+			[]string{"length", fmt.Sprintf("%d", s.length)},
 		}, nil)
 	} else {
 		return brimtext.Align([][]string{}, nil)

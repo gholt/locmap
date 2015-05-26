@@ -11,7 +11,7 @@ import (
 )
 
 // ValueLocMapL is an interface for tracking the mappings
-// from keys to the locations of their values.This implementation also tracks a length value for each key.
+// from keys to the locations of their values.This implementation also // tracks a length value for each key.
 type ValueLocMapL interface {
 	// Get returns timestamp, blockID, offset, length for keyA, keyB.
 	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint32, offset uint32, length uint32)

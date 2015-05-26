@@ -11,7 +11,7 @@ import (
 )
 
 // ValueLocMap{{if .l}}L{{end}} is an interface for tracking the mappings
-// from keys to the locations of their values.{{if .l}}This implementation also tracks a length value for each key.{{end}}
+// from keys to the locations of their values.{{if .l}}This implementation also // tracks a length value for each key.{{end}}
 type ValueLocMap{{if .l}}L{{end}} interface {
     // Get returns timestamp, blockID, offset{{if .l}}, length{{end}} for keyA, keyB.
 	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint32, offset uint32{{if .l}}, length uint32{{end}})

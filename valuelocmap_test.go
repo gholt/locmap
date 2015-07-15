@@ -1,6 +1,22 @@
 package valuelocmap
 
-import "testing"
+import (
+	"encoding/binary"
+	"testing"
+
+	"gopkg.in/gholt/brimutil.v1"
+)
+
+func TestNewRoots(t *testing.T) {
+	vlm := New(OptRoots(16)).(*valueLocMap)
+	if len(vlm.roots) < 16 {
+		t.Fatal(len(vlm.roots))
+	}
+	vlm = New(OptRoots(17)).(*valueLocMap)
+	if len(vlm.roots) < 17 {
+		t.Fatal(len(vlm.roots))
+	}
+}
 
 func TestSetNewKeyOldTimestampIs0AndNewKeySaved(t *testing.T) {
 	vlm := New().(*valueLocMap)
@@ -645,5 +661,35 @@ func TestSetOverwriteKeyBlockID0OldTimestampIsSameAndOverwriteWins(t *testing.T)
 	}
 	if lengthGet != 0 {
 		t.Fatal(lengthGet, 0)
+	}
+}
+
+func TestExerciseSplitMerge(t *testing.T) {
+	// count needs to be high enough to fill all the root pages, hit the
+	// overflow of those pages, and some pages below that too.
+	count := 100000
+	// seed just provides a repeatable test scenario.
+	seed := 1
+	// OptRoots is set low to get deeper quicker.
+	// OptPageSize is set low to speed up the test.
+	// OptSplitMultiplier is set low to get splits to happen quicker.
+	vlm := New(OptWorkers(1), OptRoots(1), OptPageSize(512), OptSplitMultiplier(1)).(*valueLocMap)
+	// Override the mergeLevel to make it happen more often.
+	for i := 0; i < len(vlm.roots); i++ {
+		vlm.roots[i].mergeLevel = vlm.roots[i].splitLevel - 2
+	}
+	if vlm.roots[0].mergeLevel < 10 {
+		t.Fatal(vlm.roots[0].mergeLevel)
+	}
+	keyspace := make([]byte, count*16)
+	brimutil.NewSeededScrambled(int64(seed)).Read(keyspace)
+	timestamp := uint64(1)
+	for i := len(keyspace) - 16; i > 0; i -= 16 {
+		vlm.Set(binary.BigEndian.Uint64(keyspace[i:]), binary.BigEndian.Uint64(keyspace[i+8:]), timestamp, 1, 2, 3, false)
+		timestamp++
+	}
+	for i := len(keyspace) - 16; i > 0; i -= 16 {
+		vlm.Set(binary.BigEndian.Uint64(keyspace[i:]), binary.BigEndian.Uint64(keyspace[i+8:]), timestamp, 0, 0, 0, false)
+		timestamp++
 	}
 }

@@ -171,7 +171,9 @@ func OptRoots(roots int) func(*config) {
 }
 
 // OptPageSize controls the size of each chunk of memory allocated. Defaults to
-// env VALUELOCMAP_PAGESIZE or 524,288.
+// env VALUELOCMAP_PAGESIZE or 524,288. The floor for this setting is four
+// times the size of an internal entry (40 bytes each at the time of this
+// writing).
 func OptPageSize(bytes int) func(*config) {
 	return func(cfg *config) {
 		cfg.pageSize = bytes

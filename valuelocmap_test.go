@@ -671,7 +671,7 @@ func TestExerciseSplitMerge(t *testing.T) {
 	// seed just provides a repeatable test scenario.
 	seed := 1
 	// OptRoots is set low to get deeper quicker.
-	// OptPageSize is set low to speed up the test.
+	// OptPageSize is set low to cause more page creation and deletion.
 	// OptSplitMultiplier is set low to get splits to happen quicker.
 	vlm := New(OptWorkers(1), OptRoots(1), OptPageSize(512), OptSplitMultiplier(1)).(*valueLocMap)
 	// Override the mergeLevel to make it happen more often.
@@ -683,13 +683,20 @@ func TestExerciseSplitMerge(t *testing.T) {
 	}
 	keyspace := make([]byte, count*16)
 	brimutil.NewSeededScrambled(int64(seed)).Read(keyspace)
-	timestamp := uint64(1)
-	for i := len(keyspace) - 16; i > 0; i -= 16 {
-		vlm.Set(binary.BigEndian.Uint64(keyspace[i:]), binary.BigEndian.Uint64(keyspace[i+8:]), timestamp, 1, 2, 3, false)
-		timestamp++
+	for i := len(keyspace) - 16; i >= 0; i -= 16 {
+		vlm.Set(binary.BigEndian.Uint64(keyspace[i:]), binary.BigEndian.Uint64(keyspace[i+8:]), 1, 1, 2, 3, false)
 	}
-	for i := len(keyspace) - 16; i > 0; i -= 16 {
-		vlm.Set(binary.BigEndian.Uint64(keyspace[i:]), binary.BigEndian.Uint64(keyspace[i+8:]), timestamp, 0, 0, 0, false)
-		timestamp++
+	for i := len(keyspace) - 16; i >= 0; i -= 16 {
+		vlm.Set(binary.BigEndian.Uint64(keyspace[i:]), binary.BigEndian.Uint64(keyspace[i+8:]), 2, 3, 4, 5, false)
+	}
+	for i := len(keyspace) - 16; i >= 0; i -= 16 {
+		vlm.Set(binary.BigEndian.Uint64(keyspace[i:]), binary.BigEndian.Uint64(keyspace[i+8:]), 3, 0, 0, 0, false)
+	}
+	endingCount, length, _ := vlm.GatherStats(uint64(0), false)
+	if endingCount != 0 {
+		t.Fatal(endingCount)
+	}
+	if length != 0 {
+		t.Fatal(length)
 	}
 }

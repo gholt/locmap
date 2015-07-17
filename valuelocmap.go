@@ -842,14 +842,18 @@ func (vlm *valueLocMap) discard(start uint64, stop uint64, mask uint64, n *node)
 		return
 	}
 	if n.a != nil {
-		n.a.lock.RLock() // Will be released by discard
+		// It's okay if we run Discard on nodes that aren't reachable any
+		// longer, whereas with Get and Set their work must be reachable. So
+		// Discard will pull the subnode values, unlock the parent, and then
+		// work on the children so it doesn't keep things tied up.
+		a := n.a
+		b := n.b
 		n.lock.RUnlock()
-		vlm.discard(start, stop, mask, n.a)
-		n.lock.RLock()
-		if n.b != nil {
-			n.b.lock.RLock() // Will be released by discard
-			n.lock.RUnlock()
-			vlm.discard(start, stop, mask, n.b)
+		a.lock.RLock() // Will be released by discard
+		vlm.discard(start, stop, mask, a)
+		if b != nil {
+			b.lock.RLock() // Will be released by discard
+			vlm.discard(start, stop, mask, b)
 		}
 		return
 	}

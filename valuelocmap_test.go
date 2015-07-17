@@ -2,6 +2,7 @@ package valuelocmap
 
 import (
 	"encoding/binary"
+	"math"
 	"testing"
 
 	"gopkg.in/gholt/brimutil.v1"
@@ -664,7 +665,59 @@ func TestSetOverwriteKeyBlockID0OldTimestampIsSameAndOverwriteWins(t *testing.T)
 	}
 }
 
-func TestExerciseSplitMerge(t *testing.T) {
+func TestDiscard(t *testing.T) {
+	vlm := New().(*valueLocMap)
+	keyA := uint64(0)
+	keyB := uint64(0)
+	timestamp1 := uint64(1)
+	blockID1 := uint32(1)
+	offset1 := uint32(2)
+	length1 := uint32(3)
+	vlm.Set(keyA, keyB, timestamp1, blockID1, offset1, length1, false)
+	timestamp2, blockID2, offset2, length2 := vlm.Get(keyA, keyB)
+	if timestamp2 != timestamp1 {
+		t.Fatal(timestamp2)
+	}
+	if blockID2 != blockID1 {
+		t.Fatal(blockID2)
+	}
+	if offset2 != offset1 {
+		t.Fatal(offset2)
+	}
+	if length2 != length1 {
+		t.Fatal(length2)
+	}
+	vlm.Discard(0, math.MaxUint64, 2)
+	timestamp2, blockID2, offset2, length2 = vlm.Get(keyA, keyB)
+	if timestamp2 != timestamp1 {
+		t.Fatal(timestamp2)
+	}
+	if blockID2 != blockID1 {
+		t.Fatal(blockID2)
+	}
+	if offset2 != offset1 {
+		t.Fatal(offset2)
+	}
+	if length2 != length1 {
+		t.Fatal(length2)
+	}
+	vlm.Discard(0, math.MaxUint64, 1)
+	timestamp2, blockID2, offset2, length2 = vlm.Get(keyA, keyB)
+	if timestamp2 != 0 {
+		t.Fatal(timestamp2)
+	}
+	if blockID2 != 0 {
+		t.Fatal(blockID2)
+	}
+	if offset2 != 0 {
+		t.Fatal(offset2)
+	}
+	if length2 != 0 {
+		t.Fatal(length2)
+	}
+}
+
+func TestExerciseSplitMergeDiscard(t *testing.T) {
 	// count needs to be high enough to fill all the root pages, hit the
 	// overflow of those pages, and some pages below that too.
 	count := 100000
@@ -707,9 +760,11 @@ func TestExerciseSplitMerge(t *testing.T) {
 	for i := len(keyspace) - 16; i >= 0; i -= 16 {
 		kt(binary.BigEndian.Uint64(keyspace[i:]), binary.BigEndian.Uint64(keyspace[i+8:]), 1, 2, 3, 4)
 	}
+	vlm.Discard(0, math.MaxUint64, 2)
 	for i := len(keyspace) - 16; i >= 0; i -= 16 {
 		kt(binary.BigEndian.Uint64(keyspace[i:]), binary.BigEndian.Uint64(keyspace[i+8:]), 2, 3, 4, 5)
 	}
+	vlm.Discard(0, math.MaxUint64, 1)
 	for i := len(keyspace) - 16; i >= 0; i -= 16 {
 		kt(binary.BigEndian.Uint64(keyspace[i:]), binary.BigEndian.Uint64(keyspace[i+8:]), 3, 0, 0, 0)
 	}

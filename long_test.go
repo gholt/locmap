@@ -2,14 +2,15 @@
 // Since this has concurrency tests, you probably want to run with something
 // like:
 // $ long_test=true go test -cpu=1,3,7
-// You'll need a good amount of RAM too. The above uses about 3.5G of memory
-// and takes about 3 minutes to run on my MacBook Pro Retina 15".
+// You'll need a good amount of RAM too. The above uses about 3-4G of memory
+// and takes about 2-3 minutes to run on my MacBook Pro Retina 15".
 
 package valuelocmap
 
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"os"
 	"sync"
 	"testing"
@@ -57,6 +58,9 @@ func TestExerciseSplitMergeLong(t *testing.T) {
 	}
 	kt := func(ka uint64, kb uint64, ts uint64, b uint32, o uint32, l uint32) {
 		vlm.Set(ka, kb, ts, b, o, l, false)
+		if ts&2 != 0 { // test calls discard with 2 as a mask quite often
+			return
+		}
 		ts2, b2, o2, l2 := vlm.Get(ka, kb)
 		if (b != 0 && ts2 != ts) || (b == 0 && ts2 != 0) {
 			panic(fmt.Sprintf("%x %x %d %d %d %d ! %d", ka, kb, ts, b, o, l, ts2))
@@ -87,6 +91,9 @@ func TestExerciseSplitMergeLong(t *testing.T) {
 			}
 			for k := len(keyspaces[j]) - 16; k >= halfBytes; k -= 16 {
 				kt(binary.BigEndian.Uint64(keyspaces[j][k:]), binary.BigEndian.Uint64(keyspaces[j][k+8:]), 1, 1, 2, 3)
+			}
+			if j%100 == 0 {
+				vlm.Discard(0, math.MaxUint64, 2)
 			}
 			for k := len(keyspaces[j]) - 16; k >= halfBytes; k -= 16 {
 				kt(binary.BigEndian.Uint64(keyspaces[j][k:]), binary.BigEndian.Uint64(keyspaces[j][k+8:]), 2, 3, 4, 5)

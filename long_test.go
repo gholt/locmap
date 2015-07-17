@@ -2,13 +2,14 @@
 // Since this has concurrency tests, you probably want to run with something
 // like:
 // $ long_test=true go test -cpu=1,3,7
-// You'll need a good amount of RAM too. The above uses about 3G of memory and
-// takes about 3.5 minutes to run on my MacBook Pro Retina 15".
+// You'll need a good amount of RAM too. The above uses about 3.5G of memory
+// and takes about 3 minutes to run on my MacBook Pro Retina 15".
 
 package valuelocmap
 
 import (
 	"encoding/binary"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -31,7 +32,7 @@ func TestExerciseSplitMergeLong(t *testing.T) {
 	// count is the number of keys per keyset. Each key in a keyset will be
 	// added and removed sequentially but the keysets will be executing
 	// concurrently.
-	count := 100000
+	count := 20000
 	keysetCount := 1000
 	// OptRoots is set low to get deeper quicker and cause more contention.
 	// OptPageSize is set low to cause more page creation and deletion.
@@ -47,30 +48,51 @@ func TestExerciseSplitMergeLong(t *testing.T) {
 	keyspaces := make([][]byte, keysetCount)
 	for i := 0; i < keysetCount; i++ {
 		keyspaces[i] = make([]byte, count*16)
-		brimutil.NewSeededScrambled(int64(1)).Read(keyspaces[i])
+		brimutil.NewSeededScrambled(int64(i)).Read(keyspaces[i])
+		// since scrambled doesn't guarantee uniqueness, we do that in the
+		// middle of each key.
+		for j := uint32(0); j < uint32(count); j++ {
+			binary.BigEndian.PutUint32(keyspaces[i][j*16+4:], j)
+		}
+	}
+	kt := func(ka uint64, kb uint64, ts uint64, b uint32, o uint32, l uint32) {
+		vlm.Set(ka, kb, ts, b, o, l, false)
+		ts2, b2, o2, l2 := vlm.Get(ka, kb)
+		if (b != 0 && ts2 != ts) || (b == 0 && ts2 != 0) {
+			panic(fmt.Sprintf("%x %x %d %d %d %d ! %d", ka, kb, ts, b, o, l, ts2))
+		}
+		if b2 != b {
+			panic(fmt.Sprintf("%x %x %d %d %d %d ! %d", ka, kb, ts, b, o, l, b2))
+		}
+		if o2 != o {
+			panic(fmt.Sprintf("%x %x %d %d %d %d ! %d", ka, kb, ts, b, o, l, o2))
+		}
+		if l2 != l {
+			panic(fmt.Sprintf("%x %x %d %d %d %d ! %d", ka, kb, ts, b, o, l, l2))
+		}
 	}
 	halfBytes := count / 2 * 16
 	wg := sync.WaitGroup{}
+	wg.Add(keysetCount)
 	for i := 0; i < keysetCount; i++ {
-		wg.Add(1)
 		go func(j int) {
 			for k := halfBytes - 16; k >= 0; k -= 16 {
-				vlm.Set(binary.BigEndian.Uint64(keyspaces[j][k:]), binary.BigEndian.Uint64(keyspaces[j][k+8:]), 1, 1, 2, 3, false)
+				kt(binary.BigEndian.Uint64(keyspaces[j][k:]), binary.BigEndian.Uint64(keyspaces[j][k+8:]), 1, 1, 2, 3)
 			}
 			for k := halfBytes - 16; k >= 0; k -= 16 {
-				vlm.Set(binary.BigEndian.Uint64(keyspaces[j][k:]), binary.BigEndian.Uint64(keyspaces[j][k+8:]), 2, 3, 4, 5, false)
+				kt(binary.BigEndian.Uint64(keyspaces[j][k:]), binary.BigEndian.Uint64(keyspaces[j][k+8:]), 2, 3, 4, 5)
 			}
 			for k := halfBytes - 16; k >= 0; k -= 16 {
-				vlm.Set(binary.BigEndian.Uint64(keyspaces[j][k:]), binary.BigEndian.Uint64(keyspaces[j][k+8:]), 3, 0, 0, 0, false)
+				kt(binary.BigEndian.Uint64(keyspaces[j][k:]), binary.BigEndian.Uint64(keyspaces[j][k+8:]), 3, 0, 0, 0)
 			}
 			for k := len(keyspaces[j]) - 16; k >= halfBytes; k -= 16 {
-				vlm.Set(binary.BigEndian.Uint64(keyspaces[j][k:]), binary.BigEndian.Uint64(keyspaces[j][k+8:]), 1, 1, 2, 3, false)
+				kt(binary.BigEndian.Uint64(keyspaces[j][k:]), binary.BigEndian.Uint64(keyspaces[j][k+8:]), 1, 1, 2, 3)
 			}
 			for k := len(keyspaces[j]) - 16; k >= halfBytes; k -= 16 {
-				vlm.Set(binary.BigEndian.Uint64(keyspaces[j][k:]), binary.BigEndian.Uint64(keyspaces[j][k+8:]), 2, 3, 4, 5, false)
+				kt(binary.BigEndian.Uint64(keyspaces[j][k:]), binary.BigEndian.Uint64(keyspaces[j][k+8:]), 2, 3, 4, 5)
 			}
 			for k := len(keyspaces[j]) - 16; k >= halfBytes; k -= 16 {
-				vlm.Set(binary.BigEndian.Uint64(keyspaces[j][k:]), binary.BigEndian.Uint64(keyspaces[j][k+8:]), 3, 0, 0, 0, false)
+				kt(binary.BigEndian.Uint64(keyspaces[j][k:]), binary.BigEndian.Uint64(keyspaces[j][k+8:]), 3, 0, 0, 0)
 			}
 			wg.Done()
 		}(i)

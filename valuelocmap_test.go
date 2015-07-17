@@ -683,14 +683,35 @@ func TestExerciseSplitMerge(t *testing.T) {
 	}
 	keyspace := make([]byte, count*16)
 	brimutil.NewSeededScrambled(int64(seed)).Read(keyspace)
-	for i := len(keyspace) - 16; i >= 0; i -= 16 {
-		vlm.Set(binary.BigEndian.Uint64(keyspace[i:]), binary.BigEndian.Uint64(keyspace[i+8:]), 1, 1, 2, 3, false)
+	// since scrambled doesn't guarantee uniqueness, we do that in the middle
+	// of each key.
+	for j := uint32(0); j < uint32(count); j++ {
+		binary.BigEndian.PutUint32(keyspace[j*16+4:], j)
+	}
+	kt := func(ka uint64, kb uint64, ts uint64, b uint32, o uint32, l uint32) {
+		vlm.Set(ka, kb, ts, b, o, l, false)
+		ts2, b2, o2, l2 := vlm.Get(ka, kb)
+		if (b != 0 && ts2 != ts) || (b == 0 && ts2 != 0) {
+			t.Fatalf("%x %x %d %d %d %d ! %d", ka, kb, ts, b, o, l, ts2)
+		}
+		if b2 != b {
+			t.Fatalf("%x %x %d %d %d %d ! %d", ka, kb, ts, b, o, l, b2)
+		}
+		if o2 != o {
+			t.Fatalf("%x %x %d %d %d %d ! %d", ka, kb, ts, b, o, l, o2)
+		}
+		if l2 != l {
+			t.Fatalf("%x %x %d %d %d %d ! %d", ka, kb, ts, b, o, l, l2)
+		}
 	}
 	for i := len(keyspace) - 16; i >= 0; i -= 16 {
-		vlm.Set(binary.BigEndian.Uint64(keyspace[i:]), binary.BigEndian.Uint64(keyspace[i+8:]), 2, 3, 4, 5, false)
+		kt(binary.BigEndian.Uint64(keyspace[i:]), binary.BigEndian.Uint64(keyspace[i+8:]), 1, 2, 3, 4)
 	}
 	for i := len(keyspace) - 16; i >= 0; i -= 16 {
-		vlm.Set(binary.BigEndian.Uint64(keyspace[i:]), binary.BigEndian.Uint64(keyspace[i+8:]), 3, 0, 0, 0, false)
+		kt(binary.BigEndian.Uint64(keyspace[i:]), binary.BigEndian.Uint64(keyspace[i+8:]), 2, 3, 4, 5)
+	}
+	for i := len(keyspace) - 16; i >= 0; i -= 16 {
+		kt(binary.BigEndian.Uint64(keyspace[i:]), binary.BigEndian.Uint64(keyspace[i+8:]), 3, 0, 0, 0)
 	}
 	endingCount, length, _ := vlm.GatherStats(uint64(0), false)
 	if endingCount != 0 {

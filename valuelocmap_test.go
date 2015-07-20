@@ -665,7 +665,7 @@ func TestSetOverwriteKeyBlockID0OldTimestampIsSameAndOverwriteWins(t *testing.T)
 	}
 }
 
-func TestDiscard(t *testing.T) {
+func TestDiscardMaskNoMatch(t *testing.T) {
 	vlm := New().(*valueLocMap)
 	keyA := uint64(0)
 	keyB := uint64(0)
@@ -674,6 +674,7 @@ func TestDiscard(t *testing.T) {
 	offset1 := uint32(2)
 	length1 := uint32(3)
 	vlm.Set(keyA, keyB, timestamp1, blockID1, offset1, length1, false)
+	vlm.Discard(0, math.MaxUint64, 2)
 	timestamp2, blockID2, offset2, length2 := vlm.Get(keyA, keyB)
 	if timestamp2 != timestamp1 {
 		t.Fatal(timestamp2)
@@ -687,22 +688,19 @@ func TestDiscard(t *testing.T) {
 	if length2 != length1 {
 		t.Fatal(length2)
 	}
-	vlm.Discard(0, math.MaxUint64, 2)
-	timestamp2, blockID2, offset2, length2 = vlm.Get(keyA, keyB)
-	if timestamp2 != timestamp1 {
-		t.Fatal(timestamp2)
-	}
-	if blockID2 != blockID1 {
-		t.Fatal(blockID2)
-	}
-	if offset2 != offset1 {
-		t.Fatal(offset2)
-	}
-	if length2 != length1 {
-		t.Fatal(length2)
-	}
+}
+
+func TestDiscardMaskMatch(t *testing.T) {
+	vlm := New().(*valueLocMap)
+	keyA := uint64(0)
+	keyB := uint64(0)
+	timestamp1 := uint64(1)
+	blockID1 := uint32(1)
+	offset1 := uint32(2)
+	length1 := uint32(3)
+	vlm.Set(keyA, keyB, timestamp1, blockID1, offset1, length1, false)
 	vlm.Discard(0, math.MaxUint64, 1)
-	timestamp2, blockID2, offset2, length2 = vlm.Get(keyA, keyB)
+	timestamp2, blockID2, offset2, length2 := vlm.Get(keyA, keyB)
 	if timestamp2 != 0 {
 		t.Fatal(timestamp2)
 	}
@@ -714,6 +712,253 @@ func TestDiscard(t *testing.T) {
 	}
 	if length2 != 0 {
 		t.Fatal(length2)
+	}
+}
+
+func TestScanCallbackBasic(t *testing.T) {
+	vlm := New().(*valueLocMap)
+	keyA1 := uint64(0)
+	keyB1 := uint64(0)
+	timestamp1 := uint64(1)
+	blockID1 := uint32(1)
+	offset1 := uint32(2)
+	length1 := uint32(3)
+	vlm.Set(keyA1, keyB1, timestamp1, blockID1, offset1, length1, false)
+	good := false
+	stopped, more := vlm.ScanCallback(0, math.MaxUint64, 0, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+		if keyA2 == keyA1 && keyB2 == keyB1 {
+			if timestamp2 != timestamp1 {
+				t.Fatal(timestamp2)
+			}
+			if length2 != length1 {
+				t.Fatal(length2)
+			}
+			good = true
+		} else {
+			t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
+		}
+	})
+	if !good {
+		t.Fatal("failed")
+	}
+	if stopped != math.MaxUint64 {
+		t.Fatal(stopped)
+	}
+	if more {
+		t.Fatal("should not have been more")
+	}
+}
+
+func TestScanCallbackRangeMiss(t *testing.T) {
+	vlm := New().(*valueLocMap)
+	keyA1 := uint64(100)
+	keyB1 := uint64(0)
+	timestamp1 := uint64(1)
+	blockID1 := uint32(1)
+	offset1 := uint32(2)
+	length1 := uint32(3)
+	vlm.Set(keyA1, keyB1, timestamp1, blockID1, offset1, length1, false)
+	good := false
+	stopped, more := vlm.ScanCallback(101, math.MaxUint64, 0, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+		t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
+	})
+	if good {
+		t.Fatal("failed")
+	}
+	if stopped != math.MaxUint64 {
+		t.Fatal(stopped)
+	}
+	if more {
+		t.Fatal("should not have been more")
+	}
+	good = false
+	stopped, more = vlm.ScanCallback(0, 99, 0, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+		t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
+	})
+	if good {
+		t.Fatal("failed")
+	}
+	if stopped != 99 {
+		t.Fatal(stopped)
+	}
+	if more {
+		t.Fatal("should not have been more")
+	}
+}
+
+func TestScanCallbackMask(t *testing.T) {
+	vlm := New().(*valueLocMap)
+	keyA1 := uint64(0)
+	keyB1 := uint64(0)
+	timestamp1 := uint64(1)
+	blockID1 := uint32(1)
+	offset1 := uint32(2)
+	length1 := uint32(3)
+	vlm.Set(keyA1, keyB1, timestamp1, blockID1, offset1, length1, false)
+	good := false
+	stopped, more := vlm.ScanCallback(0, math.MaxUint64, 1, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+		if keyA2 == keyA1 && keyB2 == keyB1 {
+			if timestamp2 != timestamp1 {
+				t.Fatal(timestamp2)
+			}
+			if length2 != length1 {
+				t.Fatal(length2)
+			}
+			good = true
+		} else {
+			t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
+		}
+	})
+	if !good {
+		t.Fatal("failed")
+	}
+	if stopped != math.MaxUint64 {
+		t.Fatal(stopped)
+	}
+	if more {
+		t.Fatal("should not have been more")
+	}
+	good = false
+	stopped, more = vlm.ScanCallback(0, math.MaxUint64, 2, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+		t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
+	})
+	if good {
+		t.Fatal("failed")
+	}
+	if stopped != math.MaxUint64 {
+		t.Fatal(stopped)
+	}
+	if more {
+		t.Fatal("should not have been more")
+	}
+}
+
+func TestScanCallbackNotMask(t *testing.T) {
+	vlm := New().(*valueLocMap)
+	keyA1 := uint64(0)
+	keyB1 := uint64(0)
+	timestamp1 := uint64(1)
+	blockID1 := uint32(1)
+	offset1 := uint32(2)
+	length1 := uint32(3)
+	vlm.Set(keyA1, keyB1, timestamp1, blockID1, offset1, length1, false)
+	good := false
+	stopped, more := vlm.ScanCallback(0, math.MaxUint64, 0, 2, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+		if keyA2 == keyA1 && keyB2 == keyB1 {
+			if timestamp2 != timestamp1 {
+				t.Fatal(timestamp2)
+			}
+			if length2 != length1 {
+				t.Fatal(length2)
+			}
+			good = true
+		} else {
+			t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
+		}
+	})
+	if !good {
+		t.Fatal("failed")
+	}
+	if stopped != math.MaxUint64 {
+		t.Fatal(stopped)
+	}
+	if more {
+		t.Fatal("should not have been more")
+	}
+	good = false
+	stopped, more = vlm.ScanCallback(0, math.MaxUint64, 0, 1, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+		t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
+	})
+	if good {
+		t.Fatal("failed")
+	}
+	if stopped != math.MaxUint64 {
+		t.Fatal(stopped)
+	}
+	if more {
+		t.Fatal("should not have been more")
+	}
+}
+
+func TestScanCallbackCutoff(t *testing.T) {
+	vlm := New().(*valueLocMap)
+	keyA1 := uint64(0)
+	keyB1 := uint64(0)
+	timestamp1 := uint64(123)
+	blockID1 := uint32(1)
+	offset1 := uint32(2)
+	length1 := uint32(3)
+	vlm.Set(keyA1, keyB1, timestamp1, blockID1, offset1, length1, false)
+	good := false
+	stopped, more := vlm.ScanCallback(0, math.MaxUint64, 0, 0, 123, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+		if keyA2 == keyA1 && keyB2 == keyB1 {
+			if timestamp2 != timestamp1 {
+				t.Fatal(timestamp2)
+			}
+			if length2 != length1 {
+				t.Fatal(length2)
+			}
+			good = true
+		} else {
+			t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
+		}
+	})
+	if !good {
+		t.Fatal("failed")
+	}
+	if stopped != math.MaxUint64 {
+		t.Fatal(stopped)
+	}
+	if more {
+		t.Fatal("should not have been more")
+	}
+	good = false
+	stopped, more = vlm.ScanCallback(0, math.MaxUint64, 0, 0, 122, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+		t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
+	})
+	if good {
+		t.Fatal("failed")
+	}
+	if stopped != math.MaxUint64 {
+		t.Fatal(stopped)
+	}
+	if more {
+		t.Fatal("should not have been more")
+	}
+}
+
+func TestScanCallbackMax(t *testing.T) {
+	vlm := New(OptPageSize(128)).(*valueLocMap)
+	keyA := uint64(0)
+	for i := 0; i < 4000; i++ {
+		keyA += 0x0010000000000000
+		vlm.Set(keyA, 0, 1, 2, 3, 4, false)
+	}
+	count := 0
+	stopped, more := vlm.ScanCallback(0, math.MaxUint64, 0, 0, math.MaxUint64, 50, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+		count++
+	})
+	if count != 50 {
+		t.Fatal(count)
+	}
+	if stopped == math.MaxUint64 {
+		t.Fatal(stopped)
+	}
+	if !more {
+		t.Fatal("should have been more")
+	}
+	count = 0
+	stopped, more = vlm.ScanCallback(0, math.MaxUint64, 0, 0, math.MaxUint64, 5000, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+		count++
+	})
+	if count != 4000 {
+		t.Fatal(count)
+	}
+	if stopped != math.MaxUint64 {
+		t.Fatal(stopped)
+	}
+	if more {
+		t.Fatal("should not have been more")
 	}
 }
 

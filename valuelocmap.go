@@ -945,15 +945,15 @@ func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, not
 	if n.a != nil {
 		var stopped uint64
 		var more bool
-		n.a.lock.RLock() // Will be released by scanCallback
+		a := n.a
+		b := n.b
 		n.lock.RUnlock()
-		max, stopped, more = vlm.scanCallback(start, stop, mask, notMask, cutoff, max, callback, n.a)
+		a.lock.RLock() // Will be released by scanCallback
+		max, stopped, more = vlm.scanCallback(start, stop, mask, notMask, cutoff, max, callback, a)
 		if !more {
-			n.lock.RLock()
-			if n.b != nil {
-				n.b.lock.RLock() // Will be released by scanCallback
-				n.lock.RUnlock()
-				max, stopped, more = vlm.scanCallback(start, stop, mask, notMask, cutoff, max, callback, n.b)
+			if b != nil {
+				b.lock.RLock() // Will be released by scanCallback
+				max, stopped, more = vlm.scanCallback(start, stop, mask, notMask, cutoff, max, callback, b)
 			}
 		}
 		return max, stopped, more
@@ -994,6 +994,7 @@ func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, not
 				e = &n.overflow[e.next>>b][e.next&lm]
 				ol.RUnlock()
 			}
+			stopped = n.rangeStop
 			l.RUnlock()
 		}
 		n.lock.RUnlock()
@@ -1030,6 +1031,7 @@ func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, not
 			e = &n.overflow[e.next>>b][e.next&lm]
 			ol.RUnlock()
 		}
+		stopped = n.rangeStop
 		l.RUnlock()
 	}
 	n.lock.RUnlock()

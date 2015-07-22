@@ -962,6 +962,39 @@ func TestScanCallbackMax(t *testing.T) {
 	}
 }
 
+func TestGatherStatsBasic(t *testing.T) {
+	vlm := New().(*valueLocMap)
+	vlm.Set(0, 0, 1, 2, 3, 4, false)
+	count, length, _ := vlm.GatherStats(0, false)
+	if count != 1 {
+		t.Fatal(count)
+	}
+	if length != 4 {
+		t.Fatal(length)
+	}
+	count, length, _ = vlm.GatherStats(1, false)
+	if count != 0 {
+		t.Fatal(count)
+	}
+	if length != 0 {
+		t.Fatal(length)
+	}
+	count, length, _ = vlm.GatherStats(0, true)
+	if count != 1 {
+		t.Fatal(count)
+	}
+	if length != 4 {
+		t.Fatal(length)
+	}
+	count, length, _ = vlm.GatherStats(1, true)
+	if count != 0 {
+		t.Fatal(count)
+	}
+	if length != 0 {
+		t.Fatal(length)
+	}
+}
+
 func TestExerciseSplitMergeDiscard(t *testing.T) {
 	// count needs to be high enough to fill all the root pages, hit the
 	// overflow of those pages, and some pages below that too.

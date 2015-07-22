@@ -1089,14 +1089,14 @@ func (vlm *valueLocMap) gatherStats(s *stats, n *node, depth int) {
 		s.depthCounts[depth]++
 	}
 	if n.a != nil {
-		n.a.lock.RLock() // Will be released by gatherStats
+		a := n.a
+		b := n.b
 		n.lock.RUnlock()
-		vlm.gatherStats(s, n.a, depth+1)
-		n.lock.RLock()
-		if n.b != nil {
-			n.b.lock.RLock() // Will be released by gatherStats
-			n.lock.RUnlock()
-			vlm.gatherStats(s, n.b, depth+1)
+		a.lock.RLock() // Will be released by gatherStats
+		vlm.gatherStats(s, a, depth+1)
+		if b != nil {
+			b.lock.RLock() // Will be released by gatherStats
+			vlm.gatherStats(s, b, depth+1)
 		}
 	} else if n.used == 0 {
 		if s.statsDebug {

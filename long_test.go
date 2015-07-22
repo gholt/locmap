@@ -95,17 +95,17 @@ func TestExerciseSplitMergeLong(t *testing.T) {
 			if j%100 == 0 {
 				vlm.Discard(0, math.MaxUint64, 2)
 			}
-			if j%100 == 50 {
+			if j%100 == 33 {
 				uselessCounter := 0
 				stopped, more := vlm.ScanCallback(0, math.MaxUint64, 0, 0, math.MaxUint64, math.MaxUint64, func(keyA uint64, keyB uint64, timestamp uint64, length uint32) {
 					uselessCounter++
 				})
-				if stopped != math.MaxUint64 {
+				if more {
 					panic(fmt.Sprintf("%x", stopped))
 				}
-				if more {
-					panic(more)
-				}
+			}
+			if j%100 == 66 {
+				vlm.GatherStats(1, false)
 			}
 			for k := len(keyspaces[j]) - 16; k >= halfBytes; k -= 16 {
 				kt(binary.BigEndian.Uint64(keyspaces[j][k:]), binary.BigEndian.Uint64(keyspaces[j][k+8:]), 2, 3, 4, 5)

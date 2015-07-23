@@ -2,6 +2,7 @@ package valuelocmap
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 	"testing"
 
@@ -963,35 +964,72 @@ func TestScanCallbackMax(t *testing.T) {
 }
 
 func TestGatherStatsBasic(t *testing.T) {
-	vlm := New().(*valueLocMap)
-	vlm.Set(0, 0, 1, 2, 3, 4, false)
-	count, length, _ := vlm.GatherStats(0, false)
-	if count != 1 {
-		t.Fatal(count)
+	// count needs to be high enough to fill all the root pages, hit the
+	// overflow of those pages, and some pages below that too.
+	count := uint64(100000)
+	// seed just provides a repeatable test scenario.
+	seed := 1
+	// OptRoots is set low to get deeper quicker.
+	// OptPageSize is set low to cause more page creation and deletion.
+	// OptSplitMultiplier is set low to get splits to happen quicker.
+	vlm := New(OptWorkers(1), OptRoots(1), OptPageSize(512), OptSplitMultiplier(1)).(*valueLocMap)
+	keyspace := make([]byte, count*16)
+	brimutil.NewSeededScrambled(int64(seed)).Read(keyspace)
+	// since scrambled doesn't guarantee uniqueness, we do that in the middle
+	// of each key.
+	for j := uint32(0); j < uint32(count); j++ {
+		binary.BigEndian.PutUint32(keyspace[j*16+4:], j)
 	}
-	if length != 4 {
+	maskedCount := uint64(0)
+	for i := len(keyspace) - 16; i >= 0; i -= 16 {
+		ka := binary.BigEndian.Uint64(keyspace[i:])
+		kb := binary.BigEndian.Uint64(keyspace[i+8:])
+		ts := uint64(1)
+		if kb&1 != 0 {
+			ts = 2
+			maskedCount++
+		}
+		vlm.Set(ka, kb, ts, 2, 3, 4, false)
+	}
+	endCount, length, dbg := vlm.GatherStats(0, false)
+	if endCount != count {
+		t.Fatal(endCount)
+	}
+	if length != count*4 {
 		t.Fatal(length)
 	}
-	count, length, _ = vlm.GatherStats(1, false)
-	if count != 0 {
-		t.Fatal(count)
+	if dbg.String() != "" {
+		t.Fatal("did not expect debug output")
 	}
-	if length != 0 {
+	endCount, length, dbg = vlm.GatherStats(1, false)
+	if endCount != maskedCount {
+		t.Fatal(fmt.Sprintf("%d %d", endCount, maskedCount))
+	}
+	if length != maskedCount*4 {
+		t.Fatal(fmt.Sprintf("%d %d", length, maskedCount*4))
+	}
+	if dbg.String() != "" {
+		t.Fatal("did not expect debug output")
+	}
+	endCount, length, dbg = vlm.GatherStats(0, true)
+	if endCount != count {
+		t.Fatal(endCount)
+	}
+	if length != count*4 {
 		t.Fatal(length)
 	}
-	count, length, _ = vlm.GatherStats(0, true)
-	if count != 1 {
-		t.Fatal(count)
+	if dbg.String() == "" {
+		t.Fatal("should have been debug output")
 	}
-	if length != 4 {
+	endCount, length, dbg = vlm.GatherStats(1, true)
+	if endCount != maskedCount {
+		t.Fatal(endCount)
+	}
+	if length != maskedCount*4 {
 		t.Fatal(length)
 	}
-	count, length, _ = vlm.GatherStats(1, true)
-	if count != 0 {
-		t.Fatal(count)
-	}
-	if length != 0 {
-		t.Fatal(length)
+	if dbg.String() == "" {
+		t.Fatal("should have been debug output")
 	}
 }
 

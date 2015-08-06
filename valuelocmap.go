@@ -80,112 +80,84 @@ type ValueLocMap interface {
 	ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) (stopped uint64, more bool)
 }
 
-type config struct {
-	workers         int
-	roots           int
-	pageSize        int
-	splitMultiplier float64
+// Config represents the set of values for configuring a ValueLocMap. Note that
+// changing the values in this structure will have no effect on existing
+// ValueLocMaps; they are copied on instance creation.
+type Config struct {
+	// Workers indicates how many workers may be in use (for calculating the
+	// number of locks to create, for example). Note that the ValueLocMap
+	// does not create any goroutines itself, but is written to allow
+	// concurrent access. Defaults to GOMAXPROCS.
+	Workers int
+	// Roots indicates how many top level nodes the map should have. More top
+	// level nodes means less contention but a bit more memory. Defaults to the
+	// Workers value squared. This will be rounded up to the next power of two.
+	Roots int
+	// PageSize controls the size in bytes of each chunk of memory allocated.
+	// Defaults to 524,288 bytes. The floor for this setting is four times the
+	// size of an internal entry (40 bytes each at the time of this writing).
+	PageSize int
+	// SplitMultiplier indicates how full a memory page can get before being
+	// split into two pages. Defaults to 3.0, which means 3 times as many
+	// entries as the page alone has slots (overflow subpages are used on
+	// collisions).
+	SplitMultiplier float64
 }
 
-func resolveConfig(opts ...func(*config)) *config {
-	cfg := &config{}
+func resolveConfig(c *Config) *Config {
+	cfg := &Config{}
+	if c != nil {
+		*cfg = *c
+	}
 	if env := os.Getenv("VALUELOCMAP_WORKERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.workers = val
+			cfg.Workers = val
 		}
 	} else if env = os.Getenv("VALUESTORE_WORKERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.workers = val
+			cfg.Workers = val
 		}
 	}
-	if cfg.workers <= 0 {
-		cfg.workers = runtime.GOMAXPROCS(0)
+	if cfg.Workers < 1 {
+		cfg.Workers = 1
+	}
+	if cfg.Workers <= 0 {
+		cfg.Workers = runtime.GOMAXPROCS(0)
 	}
 	if env := os.Getenv("VALUELOCMAP_ROOTS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.roots = val
+			cfg.Roots = val
 		}
 	}
-	if cfg.roots <= 0 {
-		cfg.roots = cfg.workers * cfg.workers
+	if cfg.Roots <= 0 {
+		cfg.Roots = cfg.Workers * cfg.Workers
+	}
+	if cfg.Roots < 2 {
+		cfg.Roots = 2
 	}
 	if env := os.Getenv("VALUELOCMAP_PAGESIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
-			cfg.pageSize = val
+			cfg.PageSize = val
 		}
 	}
-	if cfg.pageSize <= 0 {
-		cfg.pageSize = 1048576
+	if cfg.PageSize <= 0 {
+		cfg.PageSize = 1048576
+	}
+	if cfg.PageSize < 1 {
+		cfg.PageSize = 1
 	}
 	if env := os.Getenv("VALUELOCMAP_SPLITMULTIPLIER"); env != "" {
 		if val, err := strconv.ParseFloat(env, 64); err == nil {
-			cfg.splitMultiplier = val
+			cfg.SplitMultiplier = val
 		}
 	}
-	if cfg.splitMultiplier <= 0 {
-		cfg.splitMultiplier = 3.0
+	if cfg.SplitMultiplier <= 0 {
+		cfg.SplitMultiplier = 3.0
 	}
-	for _, opt := range opts {
-		opt(cfg)
-	}
-	if cfg.workers < 1 {
-		cfg.workers = 1
-	}
-	if cfg.roots < 2 {
-		cfg.roots = 2
-	}
-	if cfg.pageSize < 1 {
-		cfg.pageSize = 1
-	}
-	if cfg.splitMultiplier <= 0 {
-		cfg.splitMultiplier = 0.01
+	if cfg.SplitMultiplier <= 0 {
+		cfg.SplitMultiplier = 0.01
 	}
 	return cfg
-}
-
-// OptList returns a slice with the opts given; useful if you want to possibly
-// append more options to the list before using it with New(list...).
-func OptList(opts ...func(*config)) []func(*config) {
-	return opts
-}
-
-// OptWorkers indicates how many workers may be in use (for calculating the
-// number of locks to create, for example). Note that the valuelocmap itself
-// does not create any goroutines itself, but is written to allow concurrent
-// access. Defaults to env VALUELOCMAP_WORKERS, VALUESTORE_WORKERS, or
-// GOMAXPROCS.
-func OptWorkers(count int) func(*config) {
-	return func(cfg *config) {
-		cfg.workers = count
-	}
-}
-
-// OptRoots indicates how many top level nodes the map should have. More top
-// level nodes means less contention but a bit more memory. Defaults to
-// VALUELOCMAP_ROOTS or the OptWorkers value squared. This will be rounded up
-// to the next power of two.
-func OptRoots(roots int) func(*config) {
-	return func(cfg *config) {
-		cfg.roots = roots
-	}
-}
-
-// OptPageSize controls the size of each chunk of memory allocated. Defaults to
-// env VALUELOCMAP_PAGESIZE or 524,288. The floor for this setting is four
-// times the size of an internal entry (40 bytes each at the time of this
-// writing).
-func OptPageSize(bytes int) func(*config) {
-	return func(cfg *config) {
-		cfg.pageSize = bytes
-	}
-}
-
-// OptSplitMultiplier indicates how full a memory page can get before being
-// split into two pages. Defaults to env VALUELOCMAP_SPLITMULTIPLIER or 3.0.
-func OptSplitMultiplier(multiplier float64) func(*config) {
-	return func(cfg *config) {
-		cfg.splitMultiplier = multiplier
-	}
 }
 
 type valueLocMap struct {
@@ -227,44 +199,30 @@ type entry struct {
 	next      uint32
 }
 
-// New returns a new ValueLocMap instance using the options given.
-//
-// You can provide Opt* functions for the optional configuration items, such as
-// OptWorkers:
-//
-//  vlmWithDefaults := valuelocmap.New()
-//  vlmWithOptions := valuelocmap.New(
-//      valuelocmap.OptWorkers(10),
-//      valuelocmap.OptPageSize(1048576),
-//  )
-//  opts := valuelocmap.OptList()
-//  if commandLineOptionForWorkers {
-//      opts = append(opts, valuelocmap.OptWorkers(commandLineOptionValue))
-//  }
-//  vlmWithOptionsBuiltUp := valuelocmap.New(opts...)
-func New(opts ...func(*config)) ValueLocMap {
-	cfg := resolveConfig(opts...)
-	vlm := &valueLocMap{workers: uint32(cfg.workers)}
-	est := uint32(cfg.pageSize / int(unsafe.Sizeof(entry{})))
+// New returns a new ValueLocMap instance using the config options given.
+func New(c *Config) ValueLocMap {
+	cfg := resolveConfig(c)
+	vlm := &valueLocMap{workers: uint32(cfg.Workers)}
+	est := uint32(cfg.PageSize / int(unsafe.Sizeof(entry{})))
 	if est < 4 {
 		est = 4
 	}
 	vlm.bits = 1
-	c := uint32(2)
-	for c < est {
+	count := uint32(2)
+	for count < est {
 		vlm.bits++
-		c <<= 1
+		count <<= 1
 	}
-	vlm.lowMask = c - 1
+	vlm.lowMask = count - 1
 	vlm.rootShift = 63
-	c = 2
-	for c < uint32(cfg.roots) {
+	count = 2
+	for count < uint32(cfg.Roots) {
 		vlm.rootShift--
-		c <<= 1
+		count <<= 1
 	}
-	vlm.entriesLockMask = c - 1
-	vlm.splitLevel = uint32(float64(uint32(1<<vlm.bits)) * cfg.splitMultiplier)
-	vlm.roots = make([]node, c)
+	vlm.entriesLockMask = count - 1
+	vlm.splitLevel = uint32(float64(uint32(1<<vlm.bits)) * cfg.SplitMultiplier)
+	vlm.roots = make([]node, count)
 	for i := 0; i < len(vlm.roots); i++ {
 		vlm.roots[i].highMask = uint64(1) << (vlm.rootShift - 1)
 		vlm.roots[i].rangeStart = uint64(i) << vlm.rootShift

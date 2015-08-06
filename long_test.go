@@ -35,10 +35,10 @@ func TestExerciseSplitMergeLong(t *testing.T) {
 	// concurrently.
 	count := 20000
 	keysetCount := 1000
-	// OptRoots is set low to get deeper quicker and cause more contention.
-	// OptPageSize is set low to cause more page creation and deletion.
-	// OptSplitMultiplier is set low to get splits to happen quicker.
-	vlm := New(OptRoots(8), OptPageSize(512), OptSplitMultiplier(1)).(*valueLocMap)
+	// Roots is set low to get deeper quicker and cause more contention.
+	// PageSize is set low to cause more page creation and deletion.
+	// SplitMultiplier is set low to get splits to happen quicker.
+	vlm := New(&Config{Roots: 8, PageSize: 512, SplitMultiplier: 1}).(*valueLocMap)
 	// Override the mergeLevel to make it happen more often.
 	for i := 0; i < len(vlm.roots); i++ {
 		vlm.roots[i].mergeLevel = vlm.roots[i].splitLevel - 2

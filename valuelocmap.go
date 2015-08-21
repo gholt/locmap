@@ -77,7 +77,11 @@ type ValueLocMap interface {
 	// resulting in slightly higher false positive rates (corrected for with
 	// subsequent iterations). Outgoing push replication passes end up sending
 	// duplicate information, wasting a bit of bandwidth.
-	ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) (stopped uint64, more bool)
+	//
+	// Additionally, the callback itself may abort the scan early by returning
+	// false, in which case the (stopped, more) return values are not
+	// particularly useful.
+	ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32) bool) (stopped uint64, more bool)
 }
 
 // Config represents the set of values for configuring a ValueLocMap. Note that
@@ -880,7 +884,7 @@ func (vlm *valueLocMap) discard(start uint64, stop uint64, mask uint64, n *node)
 	n.lock.RUnlock()
 }
 
-func (vlm *valueLocMap) ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32)) (uint64, bool) {
+func (vlm *valueLocMap) ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32) bool) (uint64, bool) {
 	var stopped uint64
 	var more bool
 	for i := 0; i < len(vlm.roots); i++ {
@@ -895,7 +899,7 @@ func (vlm *valueLocMap) ScanCallback(start uint64, stop uint64, mask uint64, not
 }
 
 // Will call n.lock.RUnlock()
-func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32), n *node) (uint64, uint64, bool) {
+func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32) bool, n *node) (uint64, uint64, bool) {
 	if start > n.rangeStop || stop < n.rangeStart {
 		n.lock.RUnlock()
 		return max, stop, false
@@ -927,7 +931,7 @@ func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, not
 		lm := vlm.lowMask
 		es := n.entries
 		ol := &n.overflowLock
-		for i := uint32(0); i <= lm; i++ {
+		for i := uint32(0); !more && i <= lm; i++ {
 			e := &es[i]
 			l := &n.entriesLocks[i&vlm.entriesLockMask]
 			l.RLock()
@@ -942,7 +946,11 @@ func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, not
 						more = true
 						break
 					}
-					callback(e.keyA, e.keyB, e.timestamp, e.length)
+					if !callback(e.keyA, e.keyB, e.timestamp, e.length) {
+						stopped = n.rangeStart
+						more = true
+						break
+					}
 					max--
 				}
 				if e.next == 0 {
@@ -964,7 +972,7 @@ func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, not
 	lm := vlm.lowMask
 	es := n.entries
 	ol := &n.overflowLock
-	for i := uint32(0); i <= lm; i++ {
+	for i := uint32(0); !more && i <= lm; i++ {
 		e := &es[i]
 		l := &n.entriesLocks[i&vlm.entriesLockMask]
 		l.RLock()
@@ -979,7 +987,11 @@ func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, not
 					more = true
 					break
 				}
-				callback(e.keyA, e.keyB, e.timestamp, e.length)
+				if !callback(e.keyA, e.keyB, e.timestamp, e.length) {
+					stopped = n.rangeStart
+					more = true
+					break
+				}
 				max--
 			}
 			if e.next == 0 {

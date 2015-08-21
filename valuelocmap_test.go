@@ -726,7 +726,7 @@ func TestScanCallbackBasic(t *testing.T) {
 	length1 := uint32(3)
 	vlm.Set(keyA1, keyB1, timestamp1, blockID1, offset1, length1, false)
 	good := false
-	stopped, more := vlm.ScanCallback(0, math.MaxUint64, 0, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+	stopped, more := vlm.ScanCallback(0, math.MaxUint64, 0, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) bool {
 		if keyA2 == keyA1 && keyB2 == keyB1 {
 			if timestamp2 != timestamp1 {
 				t.Fatal(timestamp2)
@@ -738,6 +738,7 @@ func TestScanCallbackBasic(t *testing.T) {
 		} else {
 			t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
 		}
+		return true
 	})
 	if !good {
 		t.Fatal("failed")
@@ -760,8 +761,9 @@ func TestScanCallbackRangeMiss(t *testing.T) {
 	length1 := uint32(3)
 	vlm.Set(keyA1, keyB1, timestamp1, blockID1, offset1, length1, false)
 	good := false
-	stopped, more := vlm.ScanCallback(101, math.MaxUint64, 0, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+	stopped, more := vlm.ScanCallback(101, math.MaxUint64, 0, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) bool {
 		t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
+		return false
 	})
 	if good {
 		t.Fatal("failed")
@@ -773,8 +775,9 @@ func TestScanCallbackRangeMiss(t *testing.T) {
 		t.Fatal("should not have been more")
 	}
 	good = false
-	stopped, more = vlm.ScanCallback(0, 99, 0, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+	stopped, more = vlm.ScanCallback(0, 99, 0, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) bool {
 		t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
+		return false
 	})
 	if good {
 		t.Fatal("failed")
@@ -797,7 +800,7 @@ func TestScanCallbackMask(t *testing.T) {
 	length1 := uint32(3)
 	vlm.Set(keyA1, keyB1, timestamp1, blockID1, offset1, length1, false)
 	good := false
-	stopped, more := vlm.ScanCallback(0, math.MaxUint64, 1, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+	stopped, more := vlm.ScanCallback(0, math.MaxUint64, 1, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) bool {
 		if keyA2 == keyA1 && keyB2 == keyB1 {
 			if timestamp2 != timestamp1 {
 				t.Fatal(timestamp2)
@@ -809,6 +812,7 @@ func TestScanCallbackMask(t *testing.T) {
 		} else {
 			t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
 		}
+		return true
 	})
 	if !good {
 		t.Fatal("failed")
@@ -820,8 +824,9 @@ func TestScanCallbackMask(t *testing.T) {
 		t.Fatal("should not have been more")
 	}
 	good = false
-	stopped, more = vlm.ScanCallback(0, math.MaxUint64, 2, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+	stopped, more = vlm.ScanCallback(0, math.MaxUint64, 2, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) bool {
 		t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
+		return false
 	})
 	if good {
 		t.Fatal("failed")
@@ -844,7 +849,7 @@ func TestScanCallbackNotMask(t *testing.T) {
 	length1 := uint32(3)
 	vlm.Set(keyA1, keyB1, timestamp1, blockID1, offset1, length1, false)
 	good := false
-	stopped, more := vlm.ScanCallback(0, math.MaxUint64, 0, 2, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+	stopped, more := vlm.ScanCallback(0, math.MaxUint64, 0, 2, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) bool {
 		if keyA2 == keyA1 && keyB2 == keyB1 {
 			if timestamp2 != timestamp1 {
 				t.Fatal(timestamp2)
@@ -856,6 +861,7 @@ func TestScanCallbackNotMask(t *testing.T) {
 		} else {
 			t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
 		}
+		return true
 	})
 	if !good {
 		t.Fatal("failed")
@@ -867,8 +873,9 @@ func TestScanCallbackNotMask(t *testing.T) {
 		t.Fatal("should not have been more")
 	}
 	good = false
-	stopped, more = vlm.ScanCallback(0, math.MaxUint64, 0, 1, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+	stopped, more = vlm.ScanCallback(0, math.MaxUint64, 0, 1, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) bool {
 		t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
+		return false
 	})
 	if good {
 		t.Fatal("failed")
@@ -891,7 +898,7 @@ func TestScanCallbackCutoff(t *testing.T) {
 	length1 := uint32(3)
 	vlm.Set(keyA1, keyB1, timestamp1, blockID1, offset1, length1, false)
 	good := false
-	stopped, more := vlm.ScanCallback(0, math.MaxUint64, 0, 0, 123, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+	stopped, more := vlm.ScanCallback(0, math.MaxUint64, 0, 0, 123, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) bool {
 		if keyA2 == keyA1 && keyB2 == keyB1 {
 			if timestamp2 != timestamp1 {
 				t.Fatal(timestamp2)
@@ -903,6 +910,7 @@ func TestScanCallbackCutoff(t *testing.T) {
 		} else {
 			t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
 		}
+		return true
 	})
 	if !good {
 		t.Fatal("failed")
@@ -914,8 +922,9 @@ func TestScanCallbackCutoff(t *testing.T) {
 		t.Fatal("should not have been more")
 	}
 	good = false
-	stopped, more = vlm.ScanCallback(0, math.MaxUint64, 0, 0, 122, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+	stopped, more = vlm.ScanCallback(0, math.MaxUint64, 0, 0, 122, 100, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) bool {
 		t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
+		return false
 	})
 	if good {
 		t.Fatal("failed")
@@ -936,8 +945,9 @@ func TestScanCallbackMax(t *testing.T) {
 		vlm.Set(keyA, 0, 1, 2, 3, 4, false)
 	}
 	count := 0
-	stopped, more := vlm.ScanCallback(0, math.MaxUint64, 0, 0, math.MaxUint64, 50, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+	stopped, more := vlm.ScanCallback(0, math.MaxUint64, 0, 0, math.MaxUint64, 50, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) bool {
 		count++
+		return true
 	})
 	if count != 50 {
 		t.Fatal(count)
@@ -949,8 +959,9 @@ func TestScanCallbackMax(t *testing.T) {
 		t.Fatal("should have been more")
 	}
 	count = 0
-	stopped, more = vlm.ScanCallback(0, math.MaxUint64, 0, 0, math.MaxUint64, 5000, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) {
+	stopped, more = vlm.ScanCallback(0, math.MaxUint64, 0, 0, math.MaxUint64, 5000, func(keyA2 uint64, keyB2 uint64, timestamp2 uint64, length2 uint32) bool {
 		count++
+		return true
 	})
 	if count != 4000 {
 		t.Fatal(count)

@@ -974,7 +974,7 @@ func TestScanCallbackMax(t *testing.T) {
 	}
 }
 
-func TestGatherStatsBasic(t *testing.T) {
+func TestStatsBasic(t *testing.T) {
 	// count needs to be high enough to fill all the root pages, hit the
 	// overflow of those pages, and some pages below that too.
 	count := uint64(100000)
@@ -1002,7 +1002,7 @@ func TestGatherStatsBasic(t *testing.T) {
 		}
 		vlm.Set(ka, kb, ts, 2, 3, 4, false)
 	}
-	endCount, length, dbg := vlm.GatherStats(0, false)
+	endCount, length, dbg := vlm.Stats(0, false)
 	if endCount != count {
 		t.Fatal(endCount)
 	}
@@ -1012,7 +1012,7 @@ func TestGatherStatsBasic(t *testing.T) {
 	if dbg.String() != "" {
 		t.Fatal("did not expect debug output")
 	}
-	endCount, length, dbg = vlm.GatherStats(1, false)
+	endCount, length, dbg = vlm.Stats(1, false)
 	if endCount != maskedCount {
 		t.Fatal(fmt.Sprintf("%d %d", endCount, maskedCount))
 	}
@@ -1022,7 +1022,7 @@ func TestGatherStatsBasic(t *testing.T) {
 	if dbg.String() != "" {
 		t.Fatal("did not expect debug output")
 	}
-	endCount, length, dbg = vlm.GatherStats(0, true)
+	endCount, length, dbg = vlm.Stats(0, true)
 	if endCount != count {
 		t.Fatal(endCount)
 	}
@@ -1032,7 +1032,7 @@ func TestGatherStatsBasic(t *testing.T) {
 	if dbg.String() == "" {
 		t.Fatal("should have been debug output")
 	}
-	endCount, length, dbg = vlm.GatherStats(1, true)
+	endCount, length, dbg = vlm.Stats(1, true)
 	if endCount != maskedCount {
 		t.Fatal(endCount)
 	}
@@ -1095,7 +1095,7 @@ func TestExerciseSplitMergeDiscard(t *testing.T) {
 	for i := len(keyspace) - 16; i >= 0; i -= 16 {
 		kt(binary.BigEndian.Uint64(keyspace[i:]), binary.BigEndian.Uint64(keyspace[i+8:]), 3, 0, 0, 0)
 	}
-	endingCount, length, _ := vlm.GatherStats(uint64(0), false)
+	endingCount, length, _ := vlm.Stats(uint64(0), false)
 	if endingCount != 0 {
 		t.Fatal(endingCount)
 	}

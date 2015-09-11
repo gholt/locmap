@@ -46,12 +46,6 @@ type ValueLocMap interface {
 	// to blockID == 0 removes it from the mapping if the timestamp stored is
 	// less than (or equal to if evenIfSameTimestamp) the timestamp passed in.
 	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
-	// GatherStats returns the active count, length, and a fmt.Stringer of
-	// additional debug information (if debug is true). The inactiveMask will
-	// be applied to each item's timestamp to determine if it is active
-	// (timestamp & inactiveMask == 0) and to be included in the active count
-	// and length returned.
-	GatherStats(inactiveMask uint64, debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
 	// Discard removes any items in the start:stop (inclusive) range whose
 	// timestamp & mask != 0.
 	Discard(start uint64, stop uint64, mask uint64)
@@ -82,6 +76,16 @@ type ValueLocMap interface {
 	// false, in which case the (stopped, more) return values are not
 	// particularly useful.
 	ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32) bool) (stopped uint64, more bool)
+	// Stats returns the active count, length, and a fmt.Stringer of additional
+	// debug information (if debug is true). The inactiveMask will be applied
+	// to each item's timestamp to determine if it is active (timestamp &
+	// inactiveMask == 0) and to be included in the active count and length
+	// returned. Note that this walks the entire data structure and is
+	// relatively expensive; debug = true will make it even more expensive.
+	//
+	// The various values reported by debugInfo are left undocumented because
+	// they are subject to change based on implementation.
+	Stats(inactiveMask uint64, debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
 }
 
 // Config represents the set of values for configuring a ValueLocMap. Note that
@@ -96,10 +100,11 @@ type Config struct {
 	// Roots indicates how many top level nodes the map should have. More top
 	// level nodes means less contention but a bit more memory. Defaults to the
 	// Workers value squared. This will be rounded up to the next power of two.
+	// The floor for this setting is 2.
 	Roots int
 	// PageSize controls the size in bytes of each chunk of memory allocated.
-	// Defaults to 524,288 bytes. The floor for this setting is four times the
-	// size of an internal entry (40 bytes each at the time of this writing).
+	// Defaults to 1,048,576 bytes. The floor for this setting is four times
+	// the Sizeof an internal entry (4 * 40 = 160 bytes).
 	PageSize int
 	// SplitMultiplier indicates how full a memory page can get before being
 	// split into two pages. Defaults to 3.0, which means 3 times as many
@@ -122,11 +127,11 @@ func resolveConfig(c *Config) *Config {
 			cfg.Workers = val
 		}
 	}
-	if cfg.Workers < 1 {
-		cfg.Workers = 1
-	}
 	if cfg.Workers <= 0 {
 		cfg.Workers = runtime.GOMAXPROCS(0)
+	}
+	if cfg.Workers < 1 { // GOMAXPROCS should always give >= 1, but in case
+		cfg.Workers = 1
 	}
 	if env := os.Getenv("VALUELOCMAP_ROOTS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
@@ -136,6 +141,7 @@ func resolveConfig(c *Config) *Config {
 	if cfg.Roots <= 0 {
 		cfg.Roots = cfg.Workers * cfg.Workers
 	}
+	// Because the Roots logic needs at least a bit to work with.
 	if cfg.Roots < 2 {
 		cfg.Roots = 2
 	}
@@ -147,8 +153,11 @@ func resolveConfig(c *Config) *Config {
 	if cfg.PageSize <= 0 {
 		cfg.PageSize = 1048576
 	}
-	if cfg.PageSize < 1 {
-		cfg.PageSize = 1
+	// Because the Page logic needs at least two bits to work with, so it can
+	// split a page when needed.
+	pageSizeFloor := 4 * int(unsafe.Sizeof(entry{}))
+	if cfg.PageSize < pageSizeFloor {
+		cfg.PageSize = pageSizeFloor
 	}
 	if env := os.Getenv("VALUELOCMAP_SPLITMULTIPLIER"); env != "" {
 		if val, err := strconv.ParseFloat(env, 64); err == nil {
@@ -157,9 +166,6 @@ func resolveConfig(c *Config) *Config {
 	}
 	if cfg.SplitMultiplier <= 0 {
 		cfg.SplitMultiplier = 3.0
-	}
-	if cfg.SplitMultiplier <= 0 {
-		cfg.SplitMultiplier = 0.01
 	}
 	return cfg
 }
@@ -193,7 +199,7 @@ type node struct {
 	used               uint32
 }
 
-type entry struct {
+type entry struct { // If the Sizeof this changes, be sure to update docs.
 	keyA      uint64
 	keyB      uint64
 	timestamp uint64
@@ -207,17 +213,18 @@ type entry struct {
 func New(c *Config) ValueLocMap {
 	cfg := resolveConfig(c)
 	vlm := &valueLocMap{workers: uint32(cfg.Workers)}
+	// Minimum bits = 2 and count = 4 because the Page logic needs at least two
+	// bits to work with, so it can split a page when needed.
+	vlm.bits = 2
+	count := uint32(4)
 	est := uint32(cfg.PageSize / int(unsafe.Sizeof(entry{})))
-	if est < 4 {
-		est = 4
-	}
-	vlm.bits = 1
-	count := uint32(2)
 	for count < est {
 		vlm.bits++
 		count <<= 1
 	}
 	vlm.lowMask = count - 1
+	// Minimum rootShift = 63 and count = 2 because the Roots logic needs at
+	// least 1 bit to work with.
 	vlm.rootShift = 63
 	count = 2
 	for count < uint32(cfg.Roots) {
@@ -231,7 +238,12 @@ func New(c *Config) ValueLocMap {
 		vlm.roots[i].highMask = uint64(1) << (vlm.rootShift - 1)
 		vlm.roots[i].rangeStart = uint64(i) << vlm.rootShift
 		vlm.roots[i].rangeStop = uint64(1)<<vlm.rootShift - 1 + vlm.roots[i].rangeStart
+		// Local splitLevel should be a random +-10% to keep splits across a
+		// distributed load from synchronizing and causing overall "split lag".
 		vlm.roots[i].splitLevel = uint32(float64(vlm.splitLevel) + (rand.Float64()-.5)/5*float64(vlm.splitLevel))
+		// Local mergeLevel should be a random percentage, up to 10% of the
+		// splitLevel, to keep merges across a distributed load from
+		// synchronizing and causing overall "merge lag".
 		vlm.roots[i].mergeLevel = uint32(rand.Float64() / 10 * float64(vlm.splitLevel))
 	}
 	return vlm
@@ -1028,7 +1040,7 @@ type stats struct {
 	length            uint64
 }
 
-func (vlm *valueLocMap) GatherStats(inactiveMask uint64, debug bool) (uint64, uint64, fmt.Stringer) {
+func (vlm *valueLocMap) Stats(inactiveMask uint64, debug bool) (uint64, uint64, fmt.Stringer) {
 	s := &stats{
 		inactiveMask:      inactiveMask,
 		statsDebug:        debug,
@@ -1040,17 +1052,17 @@ func (vlm *valueLocMap) GatherStats(inactiveMask uint64, debug bool) (uint64, ui
 	}
 	for i := uint32(0); i < s.roots; i++ {
 		n := &vlm.roots[i]
-		n.lock.RLock() // Will be released by gatherStats
+		n.lock.RLock() // Will be released by stats
 		if s.statsDebug && (n.a != nil || n.entries != nil) {
 			s.usedRoots++
 		}
-		vlm.gatherStats(s, n, 0)
+		vlm.stats(s, n, 0)
 	}
 	return s.active, s.length, s
 }
 
 // Will call n.lock.RUnlock()
-func (vlm *valueLocMap) gatherStats(s *stats, n *node, depth int) {
+func (vlm *valueLocMap) stats(s *stats, n *node, depth int) {
 	if s.statsDebug {
 		s.nodes++
 		for len(s.depthCounts) <= depth {
@@ -1062,11 +1074,11 @@ func (vlm *valueLocMap) gatherStats(s *stats, n *node, depth int) {
 		a := n.a
 		b := n.b
 		n.lock.RUnlock()
-		a.lock.RLock() // Will be released by gatherStats
-		vlm.gatherStats(s, a, depth+1)
+		a.lock.RLock() // Will be released by stats
+		vlm.stats(s, a, depth+1)
 		if b != nil {
-			b.lock.RLock() // Will be released by gatherStats
-			vlm.gatherStats(s, b, depth+1)
+			b.lock.RLock() // Will be released by stats
+			vlm.stats(s, b, depth+1)
 		}
 	} else if n.used == 0 {
 		if s.statsDebug {

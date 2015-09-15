@@ -106,7 +106,8 @@ func TestExerciseSplitMergeLong(t *testing.T) {
 				}
 			}
 			if j%100 == 66 {
-				vlm.Stats(1, false)
+				vlm.SetInactiveMask(1)
+				vlm.Stats(false)
 			}
 			for k := len(keyspaces[j]) - 16; k >= halfBytes; k -= 16 {
 				kt(binary.BigEndian.Uint64(keyspaces[j][k:]), binary.BigEndian.Uint64(keyspaces[j][k+8:]), 2, 3, 4, 5)
@@ -118,11 +119,12 @@ func TestExerciseSplitMergeLong(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	endingCount, length, _ := vlm.Stats(uint64(0), false)
-	if endingCount != 0 {
-		t.Fatal(endingCount)
+	vlm.SetInactiveMask(0)
+	stats := vlm.Stats(false)
+	if stats.ActiveCount != 0 {
+		t.Fatal(stats.ActiveCount)
 	}
-	if length != 0 {
-		t.Fatal(length)
+	if stats.ActiveBytes != 0 {
+		t.Fatal(stats.ActiveBytes)
 	}
 }

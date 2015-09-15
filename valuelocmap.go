@@ -76,16 +76,19 @@ type ValueLocMap interface {
 	// false, in which case the (stopped, more) return values are not
 	// particularly useful.
 	ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32) bool) (stopped uint64, more bool)
-	// Stats returns the active count, length, and a fmt.Stringer of additional
-	// debug information (if debug is true). The inactiveMask will be applied
-	// to each item's timestamp to determine if it is active (timestamp &
-	// inactiveMask == 0) and to be included in the active count and length
-	// returned. Note that this walks the entire data structure and is
-	// relatively expensive; debug = true will make it even more expensive.
+	// SetInactiveMask defines the mask to use with a timestamp to determine if
+	// a location is inactive (deleted, locally removed, etc.) and is used by
+	// Stats to determine what to count for its ActiveCount and ActiveBytes.
+	SetInactiveMask(mask uint64)
+	// Stats returns a Stats instance giving information about the ValueLocMap.
 	//
-	// The various values reported by debugInfo are left undocumented because
-	// they are subject to change based on implementation.
-	Stats(inactiveMask uint64, debug bool) (count uint64, length uint64, debugInfo fmt.Stringer)
+	// Note that this walks the entire data structure and is relatively
+	// expensive; debug = true will make it even more expensive.
+	//
+	// The various values reported when debug=true are left undocumented
+	// because they are subject to change based on implementation. They are
+	// only provided when Stats.String() is called.
+	Stats(debug bool) *Stats
 }
 
 // Config represents the set of values for configuring a ValueLocMap. Note that
@@ -178,6 +181,7 @@ type valueLocMap struct {
 	splitLevel      uint32
 	rootShift       uint64
 	roots           []node
+	inactiveMask    uint64
 }
 
 type node struct {
@@ -1020,7 +1024,14 @@ func (vlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, not
 	return max, stopped, more
 }
 
-type stats struct {
+type Stats struct {
+	// ActiveCount is the number of locations whose timestamp & inactiveMask ==
+	// 0 as given when Stats() was called.
+	ActiveCount uint64
+	// ActiveBytes is the number of bytes represented by locations whose
+	// timestamp & inactiveMask == 0 as given when Stats() was called.
+	ActiveBytes uint64
+
 	inactiveMask      uint64
 	statsDebug        bool
 	workers           uint32
@@ -1036,13 +1047,15 @@ type stats struct {
 	usedEntries       uint64
 	usedInOverflow    uint64
 	inactive          uint64
-	active            uint64
-	length            uint64
 }
 
-func (vlm *valueLocMap) Stats(inactiveMask uint64, debug bool) (uint64, uint64, fmt.Stringer) {
-	s := &stats{
-		inactiveMask:      inactiveMask,
+func (vlm *valueLocMap) SetInactiveMask(mask uint64) {
+	vlm.inactiveMask = mask
+}
+
+func (vlm *valueLocMap) Stats(debug bool) *Stats {
+	s := &Stats{
+		inactiveMask:      vlm.inactiveMask,
 		statsDebug:        debug,
 		workers:           vlm.workers,
 		roots:             uint32(len(vlm.roots)),
@@ -1058,11 +1071,11 @@ func (vlm *valueLocMap) Stats(inactiveMask uint64, debug bool) (uint64, uint64, 
 		}
 		vlm.stats(s, n, 0)
 	}
-	return s.active, s.length, s
+	return s
 }
 
 // Will call n.lock.RUnlock()
-func (vlm *valueLocMap) stats(s *stats, n *node, depth int) {
+func (vlm *valueLocMap) stats(s *Stats, n *node, depth int) {
 	if s.statsDebug {
 		s.nodes++
 		for len(s.depthCounts) <= depth {
@@ -1121,14 +1134,14 @@ func (vlm *valueLocMap) stats(s *stats, n *node, depth int) {
 						s.usedInOverflow++
 					}
 					if e.timestamp&s.inactiveMask == 0 {
-						s.active++
-						s.length += uint64(e.length)
+						s.ActiveCount++
+						s.ActiveBytes += uint64(e.length)
 					} else {
 						s.inactive++
 					}
 				} else if e.timestamp&s.inactiveMask == 0 {
-					s.active++
-					s.length += uint64(e.length)
+					s.ActiveCount++
+					s.ActiveBytes += uint64(e.length)
 				}
 				if e.next == 0 {
 					break
@@ -1144,32 +1157,34 @@ func (vlm *valueLocMap) stats(s *stats, n *node, depth int) {
 	}
 }
 
-func (s *stats) String() string {
+func (s *Stats) String() string {
+	report := [][]string{
+		{"ActiveCount", fmt.Sprintf("%d", s.ActiveCount)},
+		{"ActiveBytes", fmt.Sprintf("%d", s.ActiveBytes)},
+	}
 	if s.statsDebug {
 		depthCounts := fmt.Sprintf("%d", s.depthCounts[0])
 		for i := 1; i < len(s.depthCounts); i++ {
 			depthCounts += fmt.Sprintf(" %d", s.depthCounts[i])
 		}
-		return brimtext.Align([][]string{
-			[]string{"inactiveMask", fmt.Sprintf("%016x", s.inactiveMask)},
-			[]string{"workers", fmt.Sprintf("%d", s.workers)},
-			[]string{"roots", fmt.Sprintf("%d (%d bytes)", s.roots, uint64(s.roots)*uint64(unsafe.Sizeof(node{})))},
-			[]string{"usedRoots", fmt.Sprintf("%d", s.usedRoots)},
-			[]string{"entryPageSize", fmt.Sprintf("%d (%d bytes)", s.entryPageSize, uint64(s.entryPageSize)*uint64(unsafe.Sizeof(entry{})))},
-			[]string{"entryLockPageSize", fmt.Sprintf("%d (%d bytes)", s.entryLockPageSize, uint64(s.entryLockPageSize)*uint64(unsafe.Sizeof(sync.RWMutex{})))},
-			[]string{"splitLevel", fmt.Sprintf("%d +-10%%", s.splitLevel)},
-			[]string{"nodes", fmt.Sprintf("%d", s.nodes)},
-			[]string{"depth", fmt.Sprintf("%d", len(s.depthCounts))},
-			[]string{"depthCounts", depthCounts},
-			[]string{"allocedEntries", fmt.Sprintf("%d", s.allocedEntries)},
-			[]string{"allocedInOverflow", fmt.Sprintf("%d %.1f%%", s.allocedInOverflow, 100*float64(s.allocedInOverflow)/float64(s.allocedEntries))},
-			[]string{"usedEntries", fmt.Sprintf("%d %.1f%%", s.usedEntries, 100*float64(s.usedEntries)/float64(s.allocedEntries))},
-			[]string{"usedInOverflow", fmt.Sprintf("%d %.1f%%", s.usedInOverflow, 100*float64(s.usedInOverflow)/float64(s.usedEntries))},
-			[]string{"inactive", fmt.Sprintf("%d %.1f%%", s.inactive, 100*float64(s.inactive)/float64(s.usedEntries))},
-			[]string{"active", fmt.Sprintf("%d %.1f%%", s.active, 100*float64(s.active)/float64(s.usedEntries))},
-			[]string{"length", fmt.Sprintf("%d", s.length)},
-		}, nil)
-	} else {
-		return brimtext.Align([][]string{}, nil)
+		report = append(report, [][]string{
+			{"activePercentage", fmt.Sprintf("%.1f%%", 100*float64(s.ActiveCount)/float64(s.usedEntries))},
+			{"inactiveMask", fmt.Sprintf("%016x", s.inactiveMask)},
+			{"workers", fmt.Sprintf("%d", s.workers)},
+			{"roots", fmt.Sprintf("%d (%d bytes)", s.roots, uint64(s.roots)*uint64(unsafe.Sizeof(node{})))},
+			{"usedRoots", fmt.Sprintf("%d", s.usedRoots)},
+			{"entryPageSize", fmt.Sprintf("%d (%d bytes)", s.entryPageSize, uint64(s.entryPageSize)*uint64(unsafe.Sizeof(entry{})))},
+			{"entryLockPageSize", fmt.Sprintf("%d (%d bytes)", s.entryLockPageSize, uint64(s.entryLockPageSize)*uint64(unsafe.Sizeof(sync.RWMutex{})))},
+			{"splitLevel", fmt.Sprintf("%d +-10%%", s.splitLevel)},
+			{"nodes", fmt.Sprintf("%d", s.nodes)},
+			{"depth", fmt.Sprintf("%d", len(s.depthCounts))},
+			{"depthCounts", depthCounts},
+			{"allocedEntries", fmt.Sprintf("%d", s.allocedEntries)},
+			{"allocedInOverflow", fmt.Sprintf("%d %.1f%%", s.allocedInOverflow, 100*float64(s.allocedInOverflow)/float64(s.allocedEntries))},
+			{"usedEntries", fmt.Sprintf("%d %.1f%%", s.usedEntries, 100*float64(s.usedEntries)/float64(s.allocedEntries))},
+			{"usedInOverflow", fmt.Sprintf("%d %.1f%%", s.usedInOverflow, 100*float64(s.usedInOverflow)/float64(s.usedEntries))},
+			{"inactive", fmt.Sprintf("%d %.1f%%", s.inactive, 100*float64(s.inactive)/float64(s.usedEntries))},
+		}...)
 	}
+	return brimtext.Align(report, nil)
 }

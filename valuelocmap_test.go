@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"gopkg.in/gholt/brimutil.v1"
@@ -1002,44 +1003,48 @@ func TestStatsBasic(t *testing.T) {
 		}
 		vlm.Set(ka, kb, ts, 2, 3, 4, false)
 	}
-	endCount, length, dbg := vlm.Stats(0, false)
-	if endCount != count {
-		t.Fatal(endCount)
+	vlm.SetInactiveMask(0)
+	stats := vlm.Stats(false)
+	if stats.ActiveCount != count {
+		t.Fatal(stats.ActiveCount)
 	}
-	if length != count*4 {
-		t.Fatal(length)
+	if stats.ActiveBytes != count*4 {
+		t.Fatal(stats.ActiveBytes)
 	}
-	if dbg.String() != "" {
+	if strings.Contains(stats.String(), "roots") {
 		t.Fatal("did not expect debug output")
 	}
-	endCount, length, dbg = vlm.Stats(1, false)
-	if endCount != maskedCount {
-		t.Fatal(fmt.Sprintf("%d %d", endCount, maskedCount))
+	vlm.SetInactiveMask(1)
+	stats = vlm.Stats(false)
+	if stats.ActiveCount != maskedCount {
+		t.Fatal(fmt.Sprintf("%d %d", stats.ActiveCount, maskedCount))
 	}
-	if length != maskedCount*4 {
-		t.Fatal(fmt.Sprintf("%d %d", length, maskedCount*4))
+	if stats.ActiveBytes != maskedCount*4 {
+		t.Fatal(fmt.Sprintf("%d %d", stats.ActiveBytes, maskedCount*4))
 	}
-	if dbg.String() != "" {
+	if strings.Contains(stats.String(), "roots") {
 		t.Fatal("did not expect debug output")
 	}
-	endCount, length, dbg = vlm.Stats(0, true)
-	if endCount != count {
-		t.Fatal(endCount)
+	vlm.SetInactiveMask(0)
+	stats = vlm.Stats(true)
+	if stats.ActiveCount != count {
+		t.Fatal(stats.ActiveCount)
 	}
-	if length != count*4 {
-		t.Fatal(length)
+	if stats.ActiveBytes != count*4 {
+		t.Fatal(stats.ActiveBytes)
 	}
-	if dbg.String() == "" {
+	if !strings.Contains(stats.String(), "roots") {
 		t.Fatal("should have been debug output")
 	}
-	endCount, length, dbg = vlm.Stats(1, true)
-	if endCount != maskedCount {
-		t.Fatal(endCount)
+	vlm.SetInactiveMask(1)
+	stats = vlm.Stats(true)
+	if stats.ActiveCount != maskedCount {
+		t.Fatal(stats.ActiveCount)
 	}
-	if length != maskedCount*4 {
-		t.Fatal(length)
+	if stats.ActiveBytes != maskedCount*4 {
+		t.Fatal(stats.ActiveBytes)
 	}
-	if dbg.String() == "" {
+	if !strings.Contains(stats.String(), "roots") {
 		t.Fatal("should have been debug output")
 	}
 }
@@ -1095,11 +1100,12 @@ func TestExerciseSplitMergeDiscard(t *testing.T) {
 	for i := len(keyspace) - 16; i >= 0; i -= 16 {
 		kt(binary.BigEndian.Uint64(keyspace[i:]), binary.BigEndian.Uint64(keyspace[i+8:]), 3, 0, 0, 0)
 	}
-	endingCount, length, _ := vlm.Stats(uint64(0), false)
-	if endingCount != 0 {
-		t.Fatal(endingCount)
+	vlm.SetInactiveMask(0)
+	stats := vlm.Stats(false)
+	if stats.ActiveCount != 0 {
+		t.Fatal(stats.ActiveCount)
 	}
-	if length != 0 {
-		t.Fatal(length)
+	if stats.ActiveBytes != 0 {
+		t.Fatal(stats.ActiveBytes)
 	}
 }

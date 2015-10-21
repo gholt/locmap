@@ -324,7 +324,7 @@ func (locmap *{{.t}}LocMap) split(n *{{.t}}LocMapNode) {
                 ae = aen
                 continue
             }
-            be := &bes[uint32(aen.keyB)&lm]
+            be := &bes[uint32(aen.{{if eq .t "value"}}keyB{{else}}nameKeyB{{end}})&lm]
             if be.blockID == 0 {
                 *be = *aen
                 be.next = 0
@@ -514,7 +514,7 @@ func (locmap *{{.t}}LocMap) merge(n *{{.t}}LocMapNode) {
             continue
         }
         for {
-            ae := &aes[uint32(be.keyB)&lm]
+            ae := &aes[uint32(be.{{if eq .t "value"}}keyB{{else}}nameKeyB{{end}})&lm]
             if ae.blockID == 0 {
                 *ae = *be
                 ae.next = 0
@@ -611,7 +611,7 @@ func (locmap *{{.t}}LocMap) Get(keyA uint64, keyB uint64{{if eq .t "group"}}, na
     }
     b := locmap.bits
     lm := locmap.lowMask
-    i := uint32(keyB) & lm
+    i := uint32({{if eq .t "value"}}keyB{{else}}nameKeyB{{end}}) & lm
     l := &n.entriesLocks[i&locmap.entriesLockMask]
     ol := &n.overflowLock
     e := &n.entries[i]
@@ -622,7 +622,7 @@ func (locmap *{{.t}}LocMap) Get(keyA uint64, keyB uint64{{if eq .t "group"}}, na
         return 0, 0, 0, 0
     }
     for {
-        if e.keyA == keyA && e.keyB == keyB {
+        if e.keyA == keyA && e.keyB == keyB {{if eq .t "group"}} && e.nameKeyA == nameKeyA && e.nameKeyB == nameKeyB {{end}} {
             rt := e.timestamp
             rb := e.blockID
             ro := e.offset
@@ -673,7 +673,7 @@ func (locmap *{{.t}}LocMap) Set(keyA uint64, keyB uint64{{if eq .t "group"}}, na
     }
     b := locmap.bits
     lm := locmap.lowMask
-    i := uint32(keyB) & lm
+    i := uint32({{if eq .t "value"}}keyB{{else}}nameKeyB{{end}}) & lm
     l := &n.entriesLocks[i&locmap.entriesLockMask]
     ol := &n.overflowLock
     e := &n.entries[i]
@@ -682,7 +682,7 @@ func (locmap *{{.t}}LocMap) Set(keyA uint64, keyB uint64{{if eq .t "group"}}, na
     if e.blockID != 0 {
         var f uint32
         for {
-            if e.keyA == keyA && e.keyB == keyB {
+            if e.keyA == keyA && e.keyB == keyB {{if eq .t "group"}} && e.nameKeyA == nameKeyA && e.nameKeyB == nameKeyB {{end}} {
                 t := e.timestamp
                 if e.timestamp > timestamp || (e.timestamp == timestamp && !evenIfSameTimestamp) {
                     l.Unlock()
@@ -751,6 +751,10 @@ func (locmap *{{.t}}LocMap) Set(keyA uint64, keyB uint64{{if eq .t "group"}}, na
     if e.blockID == 0 {
         e.keyA = keyA
         e.keyB = keyB
+        {{if eq .t "group"}}
+        e.nameKeyA = nameKeyA
+        e.nameKeyB = nameKeyB
+        {{end}}
         e.timestamp = timestamp
         e.blockID = blockID
         e.offset = offset
@@ -797,6 +801,10 @@ func (locmap *{{.t}}LocMap) Set(keyA uint64, keyB uint64{{if eq .t "group"}}, na
         }
         e.keyA = keyA
         e.keyB = keyB
+        {{if eq .t "group"}}
+        e.nameKeyA = nameKeyA
+        e.nameKeyB = nameKeyB
+        {{end}}
         e.timestamp = timestamp
         e.blockID = blockID
         e.offset = offset

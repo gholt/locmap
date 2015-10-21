@@ -745,6 +745,7 @@ func (locmap *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, block
 	if e.blockID == 0 {
 		e.keyA = keyA
 		e.keyB = keyB
+
 		e.timestamp = timestamp
 		e.blockID = blockID
 		e.offset = offset
@@ -791,6 +792,7 @@ func (locmap *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, block
 		}
 		e.keyA = keyA
 		e.keyB = keyB
+
 		e.timestamp = timestamp
 		e.blockID = blockID
 		e.offset = offset

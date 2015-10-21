@@ -1,10 +1,14 @@
 package valuelocmap
 
-// ValueLocMap is an interface for tracking the mappings from keys to the
+// TODO: Implement and test all the things for real.
+
+// GroupLocMap is an interface for tracking the mappings from keys to the
 // locations of their values.
-type ValueLocMap interface {
-	// Get returns timestamp, blockID, offset, length for keyA, keyB.
-	Get(keyA uint64, keyB uint64) (timestamp uint64, blockID uint32, offset uint32, length uint32)
+type GroupLocMap interface {
+	// Get returns timestamp, blockID, offset, length for keyA, keyB, nameKeyA, nameKeyB.
+	Get(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64) (timestamp uint64, blockID uint32, offset uint32, length uint32)
+	// GetGroup returns all items that match keyA, keyB.
+	GetGroup(keyA uint64, keyB uint64) []*GroupLocMapItem
 	// Set stores timestamp, blockID, offset, length for keyA, keyB and returns
 	// the previous timestamp stored. If a newer item is already stored for
 	// keyA, keyB, that newer item is kept. If an item with the same timestamp
@@ -13,7 +17,7 @@ type ValueLocMap interface {
 	// location that moved from memory to disk, for example). Setting an item
 	// to blockID == 0 removes it from the mapping if the timestamp stored is
 	// less than (or equal to if evenIfSameTimestamp) the timestamp passed in.
-	Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
+	Set(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
 	// Discard removes any items in the start:stop (inclusive) range whose
 	// timestamp & mask != 0.
 	Discard(start uint64, stop uint64, mask uint64)
@@ -43,12 +47,12 @@ type ValueLocMap interface {
 	// Additionally, the callback itself may abort the scan early by returning
 	// false, in which case the (stopped, more) return values are not
 	// particularly useful.
-	ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32) bool) (stopped uint64, more bool)
+	ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp uint64, length uint32) bool) (stopped uint64, more bool)
 	// SetInactiveMask defines the mask to use with a timestamp to determine if
 	// a location is inactive (deleted, locally removed, etc.) and is used by
 	// Stats to determine what to count for its ActiveCount and ActiveBytes.
 	SetInactiveMask(mask uint64)
-	// Stats returns a Stats instance giving information about the ValueLocMap.
+	// Stats returns a Stats instance giving information about the GroupLocMap.
 	//
 	// Note that this walks the entire data structure and is relatively
 	// expensive; debug = true will make it even more expensive.
@@ -57,4 +61,17 @@ type ValueLocMap interface {
 	// because they are subject to change based on implementation. They are
 	// only provided when Stats.String() is called.
 	Stats(debug bool) *Stats
+}
+
+type GroupLocMapItem struct {
+	NameKeyA  uint64
+	NameKeyB  uint64
+	Timestamp uint64
+	BlockID   uint32
+	Offset    uint32
+	Length    uint32
+}
+
+func (tlm *groupLocMap) GetGroup(keyA uint64, keyB uint64) []*GroupLocMapItem {
+	return nil
 }

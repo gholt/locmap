@@ -21,6 +21,10 @@ a slice empties, it is merged with its pair in the tree structure and the
 tree shrinks. The tree is balanced by high bits of the key, and locations
 are distributed in the slices by the low bits.
 
+There is also a modified form of the data structure called GroupLocMap that
+expands the primary key of the map to two 128 bit keys and offers a GetGroup
+method which retrieves all matching items for the first key.
+
 [API Documentation](http://godoc.org/github.com/gholt/valuelocmap)
 
 This is the latest development area for the package.  

@@ -24,9 +24,9 @@
 package valuelocmap
 
 // got is at https://github.com/gholt/got
-//go:generate got locmap.got valuelocmapgen.go T=Value t=value
-//go:generate got locmap.got grouplocmapgen.go T=Group t=group
-//go:generate got locmap_test.got valuelocmapgen_test.go T=Value t=value
-//go:generate got locmap_test.got grouplocmapgen_test.go T=Group t=group
-//go:generate got long_test.got valuelonggen_test.go T=Value t=value
-//go:generate got long_test.got grouplonggen_test.go T=Group t=group
+//go:generate got locmap.got valuelocmapgen.go TT=VALUE T=Value t=value
+//go:generate got locmap.got grouplocmapgen.go TT=GROUP T=Group t=group
+//go:generate got locmap_test.got valuelocmapgen_test.go TT=VALUE T=Value t=value
+//go:generate got locmap_test.got grouplocmapgen_test.go TT=GROUP T=Group t=group
+//go:generate got long_test.got valuelonggen_test.go TT=VALUE T=Value t=value
+//go:generate got long_test.got grouplonggen_test.go TT=GROUP T=Group t=group

@@ -11,11 +11,11 @@ import (
 )
 
 func TestValueNewRoots(t *testing.T) {
-	tlm := NewValueLocMap(&Config{Roots: 16}).(*valueLocMap)
+	tlm := NewValueLocMap(&ValueLocMapConfig{Roots: 16}).(*valueLocMap)
 	if len(tlm.roots) < 16 {
 		t.Fatal(len(tlm.roots))
 	}
-	tlm = NewValueLocMap(&Config{Roots: 17}).(*valueLocMap)
+	tlm = NewValueLocMap(&ValueLocMapConfig{Roots: 17}).(*valueLocMap)
 	if len(tlm.roots) < 17 {
 		t.Fatal(len(tlm.roots))
 	}
@@ -177,7 +177,7 @@ func TestValueSetOverwriteKeyOldTimestampIsSameAndOverwriteWins(t *testing.T) {
 }
 
 func TestValueSetOverflowingKeys(t *testing.T) {
-	tlm := NewValueLocMap(&Config{Roots: 1, PageSize: 1}).(*valueLocMap)
+	tlm := NewValueLocMap(&ValueLocMapConfig{Roots: 1, PageSize: 1}).(*valueLocMap)
 	keyA1 := uint64(0)
 	keyB1 := uint64(0)
 	timestamp1 := uint64(2)
@@ -227,7 +227,7 @@ func TestValueSetOverflowingKeys(t *testing.T) {
 }
 
 func TestValueSetOverflowingKeysReuse(t *testing.T) {
-	tlm := NewValueLocMap(&Config{Roots: 1, PageSize: 1}).(*valueLocMap)
+	tlm := NewValueLocMap(&ValueLocMapConfig{Roots: 1, PageSize: 1}).(*valueLocMap)
 	keyA1 := uint64(0)
 	keyB1 := uint64(0)
 	timestamp1 := uint64(2)
@@ -320,7 +320,7 @@ func TestValueSetOverflowingKeysReuse(t *testing.T) {
 }
 
 func TestValueSetOverflowingKeysLots(t *testing.T) {
-	tlm := NewValueLocMap(&Config{Roots: 1, PageSize: 1, SplitMultiplier: 1000}).(*valueLocMap)
+	tlm := NewValueLocMap(&ValueLocMapConfig{Roots: 1, PageSize: 1, SplitMultiplier: 1000}).(*valueLocMap)
 	keyA := uint64(0)
 	timestamp := uint64(2)
 	blockID := uint32(1)
@@ -939,7 +939,7 @@ func TestValueScanCallbackCutoff(t *testing.T) {
 }
 
 func TestValueScanCallbackMax(t *testing.T) {
-	tlm := NewValueLocMap(&Config{Roots: 128}).(*valueLocMap)
+	tlm := NewValueLocMap(&ValueLocMapConfig{Roots: 128}).(*valueLocMap)
 	keyA := uint64(0)
 	for i := 0; i < 4000; i++ {
 		keyA += 0x0010000000000000
@@ -984,7 +984,7 @@ func TestValueStatsBasic(t *testing.T) {
 	// Roots is set low to get deeper quicker.
 	// PageSize is set low to cause more page creation and deletion.
 	// SplitMultiplier is set low to get splits to happen quicker.
-	tlm := NewValueLocMap(&Config{Workers: 1, Roots: 1, PageSize: 512, SplitMultiplier: 1}).(*valueLocMap)
+	tlm := NewValueLocMap(&ValueLocMapConfig{Workers: 1, Roots: 1, PageSize: 512, SplitMultiplier: 1}).(*valueLocMap)
 	keyspace := make([]byte, count*16)
 	brimutil.NewSeededScrambled(int64(seed)).Read(keyspace)
 	// since scrambled doesn't guarantee uniqueness, we do that in the middle
@@ -1058,7 +1058,7 @@ func TestValueExerciseSplitMergeDiscard(t *testing.T) {
 	// Roots is set low to get deeper quicker.
 	// PageSize is set low to cause more page creation and deletion.
 	// SplitMultiplier is set low to get splits to happen quicker.
-	tlm := NewValueLocMap(&Config{Workers: 1, Roots: 1, PageSize: 512, SplitMultiplier: 1}).(*valueLocMap)
+	tlm := NewValueLocMap(&ValueLocMapConfig{Workers: 1, Roots: 1, PageSize: 512, SplitMultiplier: 1}).(*valueLocMap)
 	// Override the mergeLevel to make it happen more often.
 	for i := 0; i < len(tlm.roots); i++ {
 		tlm.roots[i].mergeLevel = tlm.roots[i].splitLevel - 2

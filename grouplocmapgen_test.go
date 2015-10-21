@@ -11,11 +11,11 @@ import (
 )
 
 func TestGroupNewRoots(t *testing.T) {
-	tlm := NewGroupLocMap(&Config{Roots: 16}).(*groupLocMap)
+	tlm := NewGroupLocMap(&GroupLocMapConfig{Roots: 16}).(*groupLocMap)
 	if len(tlm.roots) < 16 {
 		t.Fatal(len(tlm.roots))
 	}
-	tlm = NewGroupLocMap(&Config{Roots: 17}).(*groupLocMap)
+	tlm = NewGroupLocMap(&GroupLocMapConfig{Roots: 17}).(*groupLocMap)
 	if len(tlm.roots) < 17 {
 		t.Fatal(len(tlm.roots))
 	}
@@ -177,7 +177,7 @@ func TestGroupSetOverwriteKeyOldTimestampIsSameAndOverwriteWins(t *testing.T) {
 }
 
 func TestGroupSetOverflowingKeys(t *testing.T) {
-	tlm := NewGroupLocMap(&Config{Roots: 1, PageSize: 1}).(*groupLocMap)
+	tlm := NewGroupLocMap(&GroupLocMapConfig{Roots: 1, PageSize: 1}).(*groupLocMap)
 	keyA1 := uint64(0)
 	keyB1 := uint64(0)
 	timestamp1 := uint64(2)
@@ -227,7 +227,7 @@ func TestGroupSetOverflowingKeys(t *testing.T) {
 }
 
 func TestGroupSetOverflowingKeysReuse(t *testing.T) {
-	tlm := NewGroupLocMap(&Config{Roots: 1, PageSize: 1}).(*groupLocMap)
+	tlm := NewGroupLocMap(&GroupLocMapConfig{Roots: 1, PageSize: 1}).(*groupLocMap)
 	keyA1 := uint64(0)
 	keyB1 := uint64(0)
 	timestamp1 := uint64(2)
@@ -320,7 +320,7 @@ func TestGroupSetOverflowingKeysReuse(t *testing.T) {
 }
 
 func TestGroupSetOverflowingKeysLots(t *testing.T) {
-	tlm := NewGroupLocMap(&Config{Roots: 1, PageSize: 1, SplitMultiplier: 1000}).(*groupLocMap)
+	tlm := NewGroupLocMap(&GroupLocMapConfig{Roots: 1, PageSize: 1, SplitMultiplier: 1000}).(*groupLocMap)
 	keyA := uint64(0)
 	timestamp := uint64(2)
 	blockID := uint32(1)
@@ -939,7 +939,7 @@ func TestGroupScanCallbackCutoff(t *testing.T) {
 }
 
 func TestGroupScanCallbackMax(t *testing.T) {
-	tlm := NewGroupLocMap(&Config{Roots: 128}).(*groupLocMap)
+	tlm := NewGroupLocMap(&GroupLocMapConfig{Roots: 128}).(*groupLocMap)
 	keyA := uint64(0)
 	for i := 0; i < 4000; i++ {
 		keyA += 0x0010000000000000
@@ -984,7 +984,7 @@ func TestGroupStatsBasic(t *testing.T) {
 	// Roots is set low to get deeper quicker.
 	// PageSize is set low to cause more page creation and deletion.
 	// SplitMultiplier is set low to get splits to happen quicker.
-	tlm := NewGroupLocMap(&Config{Workers: 1, Roots: 1, PageSize: 512, SplitMultiplier: 1}).(*groupLocMap)
+	tlm := NewGroupLocMap(&GroupLocMapConfig{Workers: 1, Roots: 1, PageSize: 512, SplitMultiplier: 1}).(*groupLocMap)
 	keyspace := make([]byte, count*16)
 	brimutil.NewSeededScrambled(int64(seed)).Read(keyspace)
 	// since scrambled doesn't guarantee uniqueness, we do that in the middle
@@ -1058,7 +1058,7 @@ func TestGroupExerciseSplitMergeDiscard(t *testing.T) {
 	// Roots is set low to get deeper quicker.
 	// PageSize is set low to cause more page creation and deletion.
 	// SplitMultiplier is set low to get splits to happen quicker.
-	tlm := NewGroupLocMap(&Config{Workers: 1, Roots: 1, PageSize: 512, SplitMultiplier: 1}).(*groupLocMap)
+	tlm := NewGroupLocMap(&GroupLocMapConfig{Workers: 1, Roots: 1, PageSize: 512, SplitMultiplier: 1}).(*groupLocMap)
 	// Override the mergeLevel to make it happen more often.
 	for i := 0; i < len(tlm.roots); i++ {
 		tlm.roots[i].mergeLevel = tlm.roots[i].splitLevel - 2

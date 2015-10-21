@@ -11,11 +11,11 @@ import (
 )
 
 func Test{{.T}}NewRoots(t *testing.T) {
-    tlm := New{{.T}}LocMap(&Config{Roots: 16}).(*{{.t}}LocMap)
+    tlm := New{{.T}}LocMap(&{{.T}}LocMapConfig{Roots: 16}).(*{{.t}}LocMap)
     if len(tlm.roots) < 16 {
         t.Fatal(len(tlm.roots))
     }
-    tlm = New{{.T}}LocMap(&Config{Roots: 17}).(*{{.t}}LocMap)
+    tlm = New{{.T}}LocMap(&{{.T}}LocMapConfig{Roots: 17}).(*{{.t}}LocMap)
     if len(tlm.roots) < 17 {
         t.Fatal(len(tlm.roots))
     }
@@ -177,7 +177,7 @@ func Test{{.T}}SetOverwriteKeyOldTimestampIsSameAndOverwriteWins(t *testing.T) {
 }
 
 func Test{{.T}}SetOverflowingKeys(t *testing.T) {
-    tlm := New{{.T}}LocMap(&Config{Roots: 1, PageSize: 1}).(*{{.t}}LocMap)
+    tlm := New{{.T}}LocMap(&{{.T}}LocMapConfig{Roots: 1, PageSize: 1}).(*{{.t}}LocMap)
     keyA1 := uint64(0)
     keyB1 := uint64(0)
     timestamp1 := uint64(2)
@@ -227,7 +227,7 @@ func Test{{.T}}SetOverflowingKeys(t *testing.T) {
 }
 
 func Test{{.T}}SetOverflowingKeysReuse(t *testing.T) {
-    tlm := New{{.T}}LocMap(&Config{Roots: 1, PageSize: 1}).(*{{.t}}LocMap)
+    tlm := New{{.T}}LocMap(&{{.T}}LocMapConfig{Roots: 1, PageSize: 1}).(*{{.t}}LocMap)
     keyA1 := uint64(0)
     keyB1 := uint64(0)
     timestamp1 := uint64(2)
@@ -320,7 +320,7 @@ func Test{{.T}}SetOverflowingKeysReuse(t *testing.T) {
 }
 
 func Test{{.T}}SetOverflowingKeysLots(t *testing.T) {
-    tlm := New{{.T}}LocMap(&Config{Roots: 1, PageSize: 1, SplitMultiplier: 1000}).(*{{.t}}LocMap)
+    tlm := New{{.T}}LocMap(&{{.T}}LocMapConfig{Roots: 1, PageSize: 1, SplitMultiplier: 1000}).(*{{.t}}LocMap)
     keyA := uint64(0)
     timestamp := uint64(2)
     blockID := uint32(1)
@@ -939,7 +939,7 @@ func Test{{.T}}ScanCallbackCutoff(t *testing.T) {
 }
 
 func Test{{.T}}ScanCallbackMax(t *testing.T) {
-    tlm := New{{.T}}LocMap(&Config{Roots: 128}).(*{{.t}}LocMap)
+    tlm := New{{.T}}LocMap(&{{.T}}LocMapConfig{Roots: 128}).(*{{.t}}LocMap)
     keyA := uint64(0)
     for i := 0; i < 4000; i++ {
         keyA += 0x0010000000000000
@@ -984,7 +984,7 @@ func Test{{.T}}StatsBasic(t *testing.T) {
     // Roots is set low to get deeper quicker.
     // PageSize is set low to cause more page creation and deletion.
     // SplitMultiplier is set low to get splits to happen quicker.
-    tlm := New{{.T}}LocMap(&Config{Workers: 1, Roots: 1, PageSize: 512, SplitMultiplier: 1}).(*{{.t}}LocMap)
+    tlm := New{{.T}}LocMap(&{{.T}}LocMapConfig{Workers: 1, Roots: 1, PageSize: 512, SplitMultiplier: 1}).(*{{.t}}LocMap)
     keyspace := make([]byte, count*16)
     brimutil.NewSeededScrambled(int64(seed)).Read(keyspace)
     // since scrambled doesn't guarantee uniqueness, we do that in the middle
@@ -1058,7 +1058,7 @@ func Test{{.T}}ExerciseSplitMergeDiscard(t *testing.T) {
     // Roots is set low to get deeper quicker.
     // PageSize is set low to cause more page creation and deletion.
     // SplitMultiplier is set low to get splits to happen quicker.
-    tlm := New{{.T}}LocMap(&Config{Workers: 1, Roots: 1, PageSize: 512, SplitMultiplier: 1}).(*{{.t}}LocMap)
+    tlm := New{{.T}}LocMap(&{{.T}}LocMapConfig{Workers: 1, Roots: 1, PageSize: 512, SplitMultiplier: 1}).(*{{.t}}LocMap)
     // Override the mergeLevel to make it happen more often.
     for i := 0; i < len(tlm.roots); i++ {
         tlm.roots[i].mergeLevel = tlm.roots[i].splitLevel - 2

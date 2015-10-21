@@ -29,7 +29,7 @@ func TestValueExerciseSplitMergeLong(t *testing.T) {
 	// Roots is set low to get deeper quicker and cause more contention.
 	// PageSize is set low to cause more page creation and deletion.
 	// SplitMultiplier is set low to get splits to happen quicker.
-	tlm := NewValueLocMap(&Config{Roots: 8, PageSize: 512, SplitMultiplier: 1}).(*valueLocMap)
+	tlm := NewValueLocMap(&ValueLocMapConfig{Roots: 8, PageSize: 512, SplitMultiplier: 1}).(*valueLocMap)
 	// Override the mergeLevel to make it happen more often.
 	for i := 0; i < len(tlm.roots); i++ {
 		tlm.roots[i].mergeLevel = tlm.roots[i].splitLevel - 2

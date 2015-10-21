@@ -202,44 +202,44 @@ type valueLocMapEntry struct {
 // given.
 func NewValueLocMap(c *ValueLocMapConfig) ValueLocMap {
 	cfg := resolveValueLocMapConfig(c)
-	tlm := &valueLocMap{workers: uint32(cfg.Workers)}
+	locmap := &valueLocMap{workers: uint32(cfg.Workers)}
 	// Minimum bits = 2 and count = 4 because the Page logic needs at least two
 	// bits to work with, so it can split a page when needed.
-	tlm.bits = 2
+	locmap.bits = 2
 	count := uint32(4)
 	est := uint32(cfg.PageSize / int(unsafe.Sizeof(valueLocMapEntry{})))
 	for count < est {
-		tlm.bits++
+		locmap.bits++
 		count <<= 1
 	}
-	tlm.lowMask = count - 1
+	locmap.lowMask = count - 1
 	// Minimum rootShift = 63 and count = 2 because the Roots logic needs at
 	// least 1 bit to work with.
-	tlm.rootShift = 63
+	locmap.rootShift = 63
 	count = 2
 	for count < uint32(cfg.Roots) {
-		tlm.rootShift--
+		locmap.rootShift--
 		count <<= 1
 	}
-	tlm.entriesLockMask = count - 1
-	tlm.splitLevel = uint32(float64(uint32(1<<tlm.bits)) * cfg.SplitMultiplier)
-	tlm.roots = make([]valueLocMapNode, count)
-	for i := 0; i < len(tlm.roots); i++ {
-		tlm.roots[i].highMask = uint64(1) << (tlm.rootShift - 1)
-		tlm.roots[i].rangeStart = uint64(i) << tlm.rootShift
-		tlm.roots[i].rangeStop = uint64(1)<<tlm.rootShift - 1 + tlm.roots[i].rangeStart
+	locmap.entriesLockMask = count - 1
+	locmap.splitLevel = uint32(float64(uint32(1<<locmap.bits)) * cfg.SplitMultiplier)
+	locmap.roots = make([]valueLocMapNode, count)
+	for i := 0; i < len(locmap.roots); i++ {
+		locmap.roots[i].highMask = uint64(1) << (locmap.rootShift - 1)
+		locmap.roots[i].rangeStart = uint64(i) << locmap.rootShift
+		locmap.roots[i].rangeStop = uint64(1)<<locmap.rootShift - 1 + locmap.roots[i].rangeStart
 		// Local splitLevel should be a random +-10% to keep splits across a
 		// distributed load from synchronizing and causing overall "split lag".
-		tlm.roots[i].splitLevel = uint32(float64(tlm.splitLevel) + (rand.Float64()-.5)/5*float64(tlm.splitLevel))
+		locmap.roots[i].splitLevel = uint32(float64(locmap.splitLevel) + (rand.Float64()-.5)/5*float64(locmap.splitLevel))
 		// Local mergeLevel should be a random percentage, up to 10% of the
 		// splitLevel, to keep merges across a distributed load from
 		// synchronizing and causing overall "merge lag".
-		tlm.roots[i].mergeLevel = uint32(rand.Float64() / 10 * float64(tlm.splitLevel))
+		locmap.roots[i].mergeLevel = uint32(rand.Float64() / 10 * float64(locmap.splitLevel))
 	}
-	return tlm
+	return locmap
 }
 
-func (tlm *valueLocMap) split(n *valueLocMapNode) {
+func (locmap *valueLocMap) split(n *valueLocMapNode) {
 	newhm := n.highMask >> 1
 	if newhm == 0 {
 		// Can't split anymore since there are no more mask bits to use; means
@@ -267,14 +267,14 @@ func (tlm *valueLocMap) split(n *valueLocMapNode) {
 	hm := n.highMask
 	var newsl uint32
 	if newhm != 1 {
-		newsl = uint32(float64(tlm.splitLevel) + (rand.Float64()-.5)/5*float64(tlm.splitLevel))
+		newsl = uint32(float64(locmap.splitLevel) + (rand.Float64()-.5)/5*float64(locmap.splitLevel))
 	}
 	an := &valueLocMapNode{
 		highMask:           newhm,
 		rangeStart:         n.rangeStart,
 		rangeStop:          hm - 1 + n.rangeStart,
 		splitLevel:         newsl,
-		mergeLevel:         uint32(rand.Float64() / 10 * float64(tlm.splitLevel)),
+		mergeLevel:         uint32(rand.Float64() / 10 * float64(locmap.splitLevel)),
 		entries:            n.entries,
 		entriesLocks:       n.entriesLocks,
 		overflow:           n.overflow,
@@ -282,14 +282,14 @@ func (tlm *valueLocMap) split(n *valueLocMapNode) {
 		used:               n.used,
 	}
 	if newhm != 1 {
-		newsl = uint32(float64(tlm.splitLevel) + (rand.Float64()-.5)/5*float64(tlm.splitLevel))
+		newsl = uint32(float64(locmap.splitLevel) + (rand.Float64()-.5)/5*float64(locmap.splitLevel))
 	}
 	bn := &valueLocMapNode{
 		highMask:     newhm,
 		rangeStart:   hm + n.rangeStart,
 		rangeStop:    n.rangeStop,
 		splitLevel:   newsl,
-		mergeLevel:   uint32(rand.Float64() / 10 * float64(tlm.splitLevel)),
+		mergeLevel:   uint32(rand.Float64() / 10 * float64(locmap.splitLevel)),
 		entries:      make([]valueLocMapEntry, len(n.entries)),
 		entriesLocks: make([]sync.RWMutex, len(n.entriesLocks)),
 	}
@@ -299,8 +299,8 @@ func (tlm *valueLocMap) split(n *valueLocMapNode) {
 	n.entriesLocks = nil
 	n.overflow = nil
 	n.used = 0
-	b := tlm.bits
-	lm := tlm.lowMask
+	b := locmap.bits
+	lm := locmap.lowMask
 	ao := an.overflow
 	bes := bn.entries
 	bo := bn.overflow
@@ -420,7 +420,7 @@ func (tlm *valueLocMap) split(n *valueLocMapNode) {
 	n.resizingLock.Unlock()
 }
 
-func (tlm *valueLocMap) merge(n *valueLocMapNode) {
+func (locmap *valueLocMap) merge(n *valueLocMapNode) {
 	n.resizingLock.Lock()
 	if n.resizing {
 		n.resizingLock.Unlock()
@@ -495,8 +495,8 @@ func (tlm *valueLocMap) merge(n *valueLocMapNode) {
 		n.resizingLock.Unlock()
 		return
 	}
-	b := tlm.bits
-	lm := tlm.lowMask
+	b := locmap.bits
+	lm := locmap.lowMask
 	aes := an.entries
 	ao := an.overflow
 	aoc := uint32(len(ao))
@@ -583,8 +583,8 @@ func (tlm *valueLocMap) merge(n *valueLocMapNode) {
 	n.resizingLock.Unlock()
 }
 
-func (tlm *valueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32, uint32) {
-	n := &tlm.roots[keyA>>tlm.rootShift]
+func (locmap *valueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32, uint32) {
+	n := &locmap.roots[keyA>>locmap.rootShift]
 	n.lock.RLock()
 	for {
 		if n.a == nil {
@@ -603,10 +603,10 @@ func (tlm *valueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32, u
 		n.lock.RLock()
 		l.RUnlock()
 	}
-	b := tlm.bits
-	lm := tlm.lowMask
+	b := locmap.bits
+	lm := locmap.lowMask
 	i := uint32(keyB) & lm
-	l := &n.entriesLocks[i&tlm.entriesLockMask]
+	l := &n.entriesLocks[i&locmap.entriesLockMask]
 	ol := &n.overflowLock
 	e := &n.entries[i]
 	l.RLock()
@@ -637,8 +637,8 @@ func (tlm *valueLocMap) Get(keyA uint64, keyB uint64) (uint64, uint32, uint32, u
 	return 0, 0, 0, 0
 }
 
-func (tlm *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
-	n := &tlm.roots[keyA>>tlm.rootShift]
+func (locmap *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
+	n := &locmap.roots[keyA>>locmap.rootShift]
 	var pn *valueLocMapNode
 	n.lock.RLock()
 	for {
@@ -649,8 +649,8 @@ func (tlm *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 			n.lock.RUnlock()
 			n.lock.Lock()
 			if n.entries == nil {
-				n.entries = make([]valueLocMapEntry, 1<<tlm.bits)
-				n.entriesLocks = make([]sync.RWMutex, tlm.entriesLockMask+1)
+				n.entries = make([]valueLocMapEntry, 1<<locmap.bits)
+				n.entriesLocks = make([]sync.RWMutex, locmap.entriesLockMask+1)
 			}
 			n.lock.Unlock()
 			n.lock.RLock()
@@ -665,10 +665,10 @@ func (tlm *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 		n.lock.RLock()
 		pn.lock.RUnlock()
 	}
-	b := tlm.bits
-	lm := tlm.lowMask
+	b := locmap.bits
+	lm := locmap.lowMask
 	i := uint32(keyB) & lm
-	l := &n.entriesLocks[i&tlm.entriesLockMask]
+	l := &n.entriesLocks[i&locmap.entriesLockMask]
 	ol := &n.overflowLock
 	e := &n.entries[i]
 	var ep *valueLocMapEntry
@@ -722,7 +722,7 @@ func (tlm *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 				l.Unlock()
 				n.lock.RUnlock()
 				if u <= n.mergeLevel && pn != nil {
-					tlm.merge(pn)
+					locmap.merge(pn)
 				}
 				return t
 			}
@@ -801,21 +801,21 @@ func (tlm *valueLocMap) Set(keyA uint64, keyB uint64, timestamp uint64, blockID 
 	l.Unlock()
 	n.lock.RUnlock()
 	if n.splitLevel != 0 && u >= n.splitLevel {
-		tlm.split(n)
+		locmap.split(n)
 	}
 	return 0
 }
 
-func (tlm *valueLocMap) Discard(start uint64, stop uint64, mask uint64) {
-	for i := 0; i < len(tlm.roots); i++ {
-		n := &tlm.roots[i]
+func (locmap *valueLocMap) Discard(start uint64, stop uint64, mask uint64) {
+	for i := 0; i < len(locmap.roots); i++ {
+		n := &locmap.roots[i]
 		n.lock.RLock() // Will be released by discard
-		tlm.discard(start, stop, mask, n)
+		locmap.discard(start, stop, mask, n)
 	}
 }
 
 // Will call n.lock.RUnlock()
-func (tlm *valueLocMap) discard(start uint64, stop uint64, mask uint64, n *valueLocMapNode) {
+func (locmap *valueLocMap) discard(start uint64, stop uint64, mask uint64, n *valueLocMapNode) {
 	if start > n.rangeStop || stop < n.rangeStart {
 		n.lock.RUnlock()
 		return
@@ -829,10 +829,10 @@ func (tlm *valueLocMap) discard(start uint64, stop uint64, mask uint64, n *value
 		b := n.b
 		n.lock.RUnlock()
 		a.lock.RLock() // Will be released by discard
-		tlm.discard(start, stop, mask, a)
+		locmap.discard(start, stop, mask, a)
 		if b != nil {
 			b.lock.RLock() // Will be released by discard
-			tlm.discard(start, stop, mask, b)
+			locmap.discard(start, stop, mask, b)
 		}
 		return
 	}
@@ -840,13 +840,13 @@ func (tlm *valueLocMap) discard(start uint64, stop uint64, mask uint64, n *value
 		n.lock.RUnlock()
 		return
 	}
-	b := tlm.bits
-	lm := tlm.lowMask
+	b := locmap.bits
+	lm := locmap.lowMask
 	es := n.entries
 	ol := &n.overflowLock
 	for i := uint32(0); i <= lm; i++ {
 		e := &es[i]
-		l := &n.entriesLocks[i&tlm.entriesLockMask]
+		l := &n.entriesLocks[i&locmap.entriesLockMask]
 		l.Lock()
 		if e.blockID == 0 {
 			l.Unlock()
@@ -901,13 +901,13 @@ func (tlm *valueLocMap) discard(start uint64, stop uint64, mask uint64, n *value
 	n.lock.RUnlock()
 }
 
-func (tlm *valueLocMap) ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32) bool) (uint64, bool) {
+func (locmap *valueLocMap) ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32) bool) (uint64, bool) {
 	var stopped uint64
 	var more bool
-	for i := 0; i < len(tlm.roots); i++ {
-		n := &tlm.roots[i]
+	for i := 0; i < len(locmap.roots); i++ {
+		n := &locmap.roots[i]
 		n.lock.RLock() // Will be released by scanCallback
-		max, stopped, more = tlm.scanCallback(start, stop, mask, notMask, cutoff, max, callback, n)
+		max, stopped, more = locmap.scanCallback(start, stop, mask, notMask, cutoff, max, callback, n)
 		if more {
 			break
 		}
@@ -916,7 +916,7 @@ func (tlm *valueLocMap) ScanCallback(start uint64, stop uint64, mask uint64, not
 }
 
 // Will call n.lock.RUnlock()
-func (tlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32) bool, n *valueLocMapNode) (uint64, uint64, bool) {
+func (locmap *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, timestamp uint64, length uint32) bool, n *valueLocMapNode) (uint64, uint64, bool) {
 	if start > n.rangeStop || stop < n.rangeStart {
 		n.lock.RUnlock()
 		return max, stop, false
@@ -928,11 +928,11 @@ func (tlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, not
 		b := n.b
 		n.lock.RUnlock()
 		a.lock.RLock() // Will be released by scanCallback
-		max, stopped, more = tlm.scanCallback(start, stop, mask, notMask, cutoff, max, callback, a)
+		max, stopped, more = locmap.scanCallback(start, stop, mask, notMask, cutoff, max, callback, a)
 		if !more {
 			if b != nil {
 				b.lock.RLock() // Will be released by scanCallback
-				max, stopped, more = tlm.scanCallback(start, stop, mask, notMask, cutoff, max, callback, b)
+				max, stopped, more = locmap.scanCallback(start, stop, mask, notMask, cutoff, max, callback, b)
 			}
 		}
 		return max, stopped, more
@@ -944,13 +944,13 @@ func (tlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, not
 	if start <= n.rangeStart && stop >= n.rangeStop {
 		var stopped uint64
 		var more bool
-		b := tlm.bits
-		lm := tlm.lowMask
+		b := locmap.bits
+		lm := locmap.lowMask
 		es := n.entries
 		ol := &n.overflowLock
 		for i := uint32(0); !more && i <= lm; i++ {
 			e := &es[i]
-			l := &n.entriesLocks[i&tlm.entriesLockMask]
+			l := &n.entriesLocks[i&locmap.entriesLockMask]
 			l.RLock()
 			if e.blockID == 0 {
 				l.RUnlock()
@@ -985,13 +985,13 @@ func (tlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, not
 	}
 	var stopped uint64
 	var more bool
-	b := tlm.bits
-	lm := tlm.lowMask
+	b := locmap.bits
+	lm := locmap.lowMask
 	es := n.entries
 	ol := &n.overflowLock
 	for i := uint32(0); !more && i <= lm; i++ {
 		e := &es[i]
-		l := &n.entriesLocks[i&tlm.entriesLockMask]
+		l := &n.entriesLocks[i&locmap.entriesLockMask]
 		l.RLock()
 		if e.blockID == 0 {
 			l.RUnlock()
@@ -1025,33 +1025,33 @@ func (tlm *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, not
 	return max, stopped, more
 }
 
-func (tlm *valueLocMap) SetInactiveMask(mask uint64) {
-	tlm.inactiveMask = mask
+func (locmap *valueLocMap) SetInactiveMask(mask uint64) {
+	locmap.inactiveMask = mask
 }
 
-func (tlm *valueLocMap) Stats(debug bool) *ValueLocMapStats {
+func (locmap *valueLocMap) Stats(debug bool) *ValueLocMapStats {
 	s := &ValueLocMapStats{
-		inactiveMask:      tlm.inactiveMask,
+		inactiveMask:      locmap.inactiveMask,
 		statsDebug:        debug,
-		workers:           tlm.workers,
-		roots:             uint32(len(tlm.roots)),
-		entryPageSize:     uint64(tlm.lowMask) + 1,
-		entryLockPageSize: uint64(tlm.entriesLockMask) + 1,
-		splitLevel:        uint32(tlm.splitLevel),
+		workers:           locmap.workers,
+		roots:             uint32(len(locmap.roots)),
+		entryPageSize:     uint64(locmap.lowMask) + 1,
+		entryLockPageSize: uint64(locmap.entriesLockMask) + 1,
+		splitLevel:        uint32(locmap.splitLevel),
 	}
 	for i := uint32(0); i < s.roots; i++ {
-		n := &tlm.roots[i]
+		n := &locmap.roots[i]
 		n.lock.RLock() // Will be released by stats
 		if s.statsDebug && (n.a != nil || n.entries != nil) {
 			s.usedRoots++
 		}
-		tlm.stats(s, n, 0)
+		locmap.stats(s, n, 0)
 	}
 	return s
 }
 
 // Will call n.lock.RUnlock()
-func (tlm *valueLocMap) stats(s *ValueLocMapStats, n *valueLocMapNode, depth int) {
+func (locmap *valueLocMap) stats(s *ValueLocMapStats, n *valueLocMapNode, depth int) {
 	if s.statsDebug {
 		s.nodes++
 		for len(s.depthCounts) <= depth {
@@ -1064,10 +1064,10 @@ func (tlm *valueLocMap) stats(s *ValueLocMapStats, n *valueLocMapNode, depth int
 		b := n.b
 		n.lock.RUnlock()
 		a.lock.RLock() // Will be released by stats
-		tlm.stats(s, a, depth+1)
+		locmap.stats(s, a, depth+1)
 		if b != nil {
 			b.lock.RLock() // Will be released by stats
-			tlm.stats(s, b, depth+1)
+			locmap.stats(s, b, depth+1)
 		}
 	} else if n.used == 0 {
 		if s.statsDebug {
@@ -1090,13 +1090,13 @@ func (tlm *valueLocMap) stats(s *ValueLocMapStats, n *valueLocMapNode, depth int
 			}
 			n.overflowLock.RUnlock()
 		}
-		b := tlm.bits
-		lm := tlm.lowMask
+		b := locmap.bits
+		lm := locmap.lowMask
 		es := n.entries
 		ol := &n.overflowLock
 		for i := uint32(0); i <= lm; i++ {
 			e := &es[i]
-			l := &n.entriesLocks[i&tlm.entriesLockMask]
+			l := &n.entriesLocks[i&locmap.entriesLockMask]
 			o := false
 			l.RLock()
 			if e.blockID == 0 {

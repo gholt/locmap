@@ -2,8 +2,8 @@
 // Since this has concurrency tests, you probably want to run with something
 // like:
 // $ long_test=true go test -cpu=1,3,7
-// You'll need a good amount of RAM too. The above uses about 3-4G of memory
-// and takes about 2-3 minutes to run on my MacBook Pro Retina 15".
+// You'll need a good amount of RAM too. The above uses about 8G of memory
+// and takes about 5 minutes to run on my MacBook Pro Retina 15".
 
 package valuelocmap
 
@@ -48,11 +48,15 @@ func TestValueExerciseSplitMergeLong(t *testing.T) {
 		}
 	}
 	kt := func(ka uint64, kb uint64, ts uint64, b uint32, o uint32, l uint32) {
+
 		locmap.Set(ka, kb, ts, b, o, l, false)
+
 		if ts&2 != 0 { // test calls discard with 2 as a mask quite often
 			return
 		}
+
 		ts2, b2, o2, l2 := locmap.Get(ka, kb)
+
 		if (b != 0 && ts2 != ts) || (b == 0 && ts2 != 0) {
 			panic(fmt.Sprintf("%x %x %d %d %d %d ! %d", ka, kb, ts, b, o, l, ts2))
 		}
@@ -65,6 +69,7 @@ func TestValueExerciseSplitMergeLong(t *testing.T) {
 		if l2 != l {
 			panic(fmt.Sprintf("%x %x %d %d %d %d ! %d", ka, kb, ts, b, o, l, l2))
 		}
+
 	}
 	halfBytes := count / 2 * 16
 	wg := sync.WaitGroup{}

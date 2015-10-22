@@ -1109,3 +1109,49 @@ func TestGroupExerciseSplitMergeDiscard(t *testing.T) {
 		t.Fatal(stats.ActiveBytes)
 	}
 }
+
+func TestGroupGetGroup(t *testing.T) {
+	locmap := NewGroupLocMap(nil)
+	nameKeyA := uint64(0)
+	nameKeyB := uint64(0x10)
+	timestamp := uint64(0x100)
+	blockID := uint32(0x1000)
+	offset := uint32(0x10000)
+	length := uint32(0x100000)
+	var expected []*GroupLocMapItem
+	for keyA := uint64(0); keyA < 2; keyA++ {
+		for keyB := uint64(0); keyB < 2; keyB++ {
+			for i := 0; i < 10; i++ {
+				nameKeyA++
+				nameKeyB++
+				locmap.Set(keyA, keyB, nameKeyA, nameKeyB, timestamp, blockID, offset, length, false)
+				if keyA == 0 && keyB == 1 {
+					expected = append(expected, &GroupLocMapItem{
+						NameKeyA:  nameKeyA,
+						NameKeyB:  nameKeyB,
+						Timestamp: timestamp,
+						BlockID:   blockID,
+						Offset:    offset,
+						Length:    length,
+					})
+				}
+			}
+		}
+	}
+	items := locmap.GetGroup(0, 1)
+	if len(items) != len(expected) {
+		t.Fatal(len(items))
+	}
+	for _, e := range expected {
+		found := false
+		for _, g := range items {
+			if e.NameKeyA == g.NameKeyA && e.NameKeyB == g.NameKeyB && e.Timestamp == g.Timestamp && e.BlockID == g.BlockID && e.Offset == g.Offset && e.Length == g.Length {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("Could not find %#v\n", e)
+		}
+	}
+}

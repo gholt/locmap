@@ -1215,6 +1215,61 @@ type GroupLocMapItem struct {
 }
 
 func (locmap *groupLocMap) GetGroup(keyA uint64, keyB uint64) []*GroupLocMapItem {
-    return nil
+    var rv []*GroupLocMapItem
+    n := &locmap.roots[keyA>>locmap.rootShift]
+    n.lock.RLock()
+    for {
+        if n.a == nil {
+            if n.entries == nil {
+                n.lock.RUnlock()
+                return rv
+            }
+            break
+        }
+        l := &n.lock
+        if keyA&n.highMask == 0 {
+            n = n.a
+        } else {
+            n = n.b
+        }
+        n.lock.RLock()
+        l.RUnlock()
+    }
+    b := locmap.bits
+    lm := locmap.lowMask
+    i := lm
+    for {
+        l := &n.entriesLocks[i&locmap.entriesLockMask]
+        ol := &n.overflowLock
+        e := &n.entries[i]
+        l.RLock()
+        if e.blockID != 0 {
+            for {
+                if e.keyA == keyA && e.keyB == keyB {
+                    rv = append(rv, &GroupLocMapItem{
+                        NameKeyA:   e.nameKeyA,
+                        NameKeyB:   e.nameKeyB,
+                        Timestamp:  e.timestamp,
+                        BlockID:    e.blockID,
+                        Offset:     e.offset,
+                        Length:     e.length,
+                    })
+                }
+                if e.next == 0 {
+                    break
+                }
+                ol.RLock()
+                e = &n.overflow[e.next>>b][e.next&lm]
+                ol.RUnlock()
+            }
+        }
+        l.RUnlock()
+        if i == 0 {
+            break
+        }
+        i--
+    }
+    n.lock.RUnlock()
+    return rv
 }
 {{end}}

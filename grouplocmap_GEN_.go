@@ -324,7 +324,7 @@ func (locmap *groupLocMap) split(n *groupLocMapNode) {
 				ae = aen
 				continue
 			}
-			be := &bes[uint32(aen.nameKeyB)&lm]
+			be := &bes[uint32(aen.keyB^aen.nameKeyA)&lm]
 			if be.blockID == 0 {
 				*be = *aen
 				be.next = 0
@@ -514,7 +514,7 @@ func (locmap *groupLocMap) merge(n *groupLocMapNode) {
 			continue
 		}
 		for {
-			ae := &aes[uint32(be.nameKeyB)&lm]
+			ae := &aes[uint32(be.keyB^be.nameKeyA)&lm]
 			if ae.blockID == 0 {
 				*ae = *be
 				ae.next = 0
@@ -611,7 +611,7 @@ func (locmap *groupLocMap) Get(keyA uint64, keyB uint64, nameKeyA uint64, nameKe
 	}
 	b := locmap.bits
 	lm := locmap.lowMask
-	i := uint32(nameKeyB) & lm
+	i := uint32(keyB^nameKeyA) & lm
 	l := &n.entriesLocks[i&locmap.entriesLockMask]
 	ol := &n.overflowLock
 	e := &n.entries[i]
@@ -673,7 +673,7 @@ func (locmap *groupLocMap) Set(keyA uint64, keyB uint64, nameKeyA uint64, nameKe
 	}
 	b := locmap.bits
 	lm := locmap.lowMask
-	i := uint32(nameKeyB) & lm
+	i := uint32(keyB^nameKeyA) & lm
 	l := &n.entriesLocks[i&locmap.entriesLockMask]
 	ol := &n.overflowLock
 	e := &n.entries[i]

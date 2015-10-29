@@ -281,11 +281,6 @@ func (locmap *{{.t}}LocMap) split(n *{{.t}}LocMapNode) {
         rangeStop:          hm - 1 + n.rangeStart,
         splitLevel:         newsl,
         mergeLevel:         uint32(rand.Float64() / 10 * float64(locmap.splitLevel)),
-        entries:            n.entries,
-        entriesLocks:       n.entriesLocks,
-        overflow:           n.overflow,
-        overflowLowestFree: n.overflowLowestFree,
-        used:               n.used,
     }
     if newhm != 1 {
         newsl = uint32(float64(locmap.splitLevel) + (rand.Float64()-.5)/5*float64(locmap.splitLevel))
@@ -296,9 +291,29 @@ func (locmap *{{.t}}LocMap) split(n *{{.t}}LocMapNode) {
         rangeStop:    n.rangeStop,
         splitLevel:   newsl,
         mergeLevel:   uint32(rand.Float64() / 10 * float64(locmap.splitLevel)),
-        entries:      make([]{{.t}}LocMapEntry, len(n.entries)),
-        entriesLocks: make([]sync.RWMutex, len(n.entriesLocks)),
     }
+    // Do quick scan for an entry to determine which side gets n.entries
+    var xn *{{.t}}LocMapNode
+    var yn *{{.t}}LocMapNode
+    nes := n.entries
+    lm := locmap.lowMask
+    for i := uint32(0); i <= lm; i++ {
+        if nes[i].blockID != 0 {
+            if nes[i].keyA&hm == 0 {
+                xn = an
+                yn = bn
+            } else {
+                xn = bn
+                yn = an
+            }
+            break
+        }
+    }
+    xn.entries = n.entries
+    xn.entriesLocks = n.entriesLocks
+    xn.overflow = n.overflow
+    xn.overflowLowestFree = n.overflowLowestFree
+    xn.used = n.used
     n.a = an
     n.b = bn
     n.entries = nil
@@ -306,119 +321,144 @@ func (locmap *{{.t}}LocMap) split(n *{{.t}}LocMapNode) {
     n.overflow = nil
     n.used = 0
     b := locmap.bits
-    lm := locmap.lowMask
-    ao := an.overflow
-    bes := bn.entries
-    bo := bn.overflow
-    boc := uint32(0)
-    aes := an.entries
+    xes := xn.entries
+    xo := xn.overflow // possibly nil
+    yes := yn.entries // which is nil
+    yo := yn.overflow // which is nil
+    yoc := uint32(0)
     // Move over all matching overflow entries.
     for i := uint32(0); i <= lm; i++ {
-        ae := &aes[i]
-        if ae.blockID == 0 {
+        xe := &xes[i]
+        if xe.blockID == 0 {
             continue
         }
-        for ae.next != 0 {
-            aen := &ao[ae.next>>b][ae.next&lm]
-            if aen.keyA&hm == 0 {
-                ae = aen
-                continue
-            }
-            be := &bes[uint32(aen.keyB{{if eq .t "group"}}^aen.nameKeyA{{end}})&lm]
-            if be.blockID == 0 {
-                *be = *aen
-                be.next = 0
+        for xe.next != 0 {
+            xen := &xo[xe.next>>b][xe.next&lm]
+            if xen.keyA&hm == 0 {
+                if xn == an {
+                    xe = xen
+                    continue
+                }
             } else {
-                if bn.overflowLowestFree != 0 {
-                    be2 := &bo[bn.overflowLowestFree>>b][bn.overflowLowestFree&lm]
-                    *be2 = *aen
-                    be2.next = be.next
-                    be.next = bn.overflowLowestFree
-                    bn.overflowLowestFree++
-                    if bn.overflowLowestFree&lm == 0 {
-                        bn.overflowLowestFree = 0
-                    }
-                } else {
-                    bo = append(bo, make([]{{.t}}LocMapEntry, 1<<b))
-                    bn.overflow = bo
-                    if boc == 0 {
-                        be2 := &bo[0][1]
-                        *be2 = *aen
-                        be2.next = be.next
-                        be.next = 1
-                        bn.overflowLowestFree = 2
-                    } else {
-                        be2 := &bo[boc][0]
-                        *be2 = *aen
-                        be2.next = be.next
-                        be.next = boc << b
-                        bn.overflowLowestFree = boc<<b + 1
-                    }
-                    boc++
+                if xn == bn {
+                    xe = xen
+                    continue
                 }
             }
-            bn.used++
-            if ae.next < an.overflowLowestFree {
-                an.overflowLowestFree = ae.next
+            if yes == nil {
+                yes = make([]{{.t}}LocMapEntry, len(xn.entries))
+                yn.entries = yes
+                yn.entriesLocks = make([]sync.RWMutex, len(xn.entriesLocks))
             }
-            ae.next = aen.next
-            aen.blockID = 0
-            aen.next = 0
-            an.used--
+            ye := &yes[uint32(xen.keyB{{if eq .t "group"}}^xen.nameKeyA{{end}})&lm]
+            if ye.blockID == 0 {
+                *ye = *xen
+                ye.next = 0
+            } else {
+                if yn.overflowLowestFree != 0 {
+                    ye2 := &yo[yn.overflowLowestFree>>b][yn.overflowLowestFree&lm]
+                    *ye2 = *xen
+                    ye2.next = ye.next
+                    ye.next = yn.overflowLowestFree
+                    yn.overflowLowestFree++
+                    if yn.overflowLowestFree&lm == 0 {
+                        yn.overflowLowestFree = 0
+                    }
+                } else {
+                    yo = append(yo, make([]{{.t}}LocMapEntry, 1<<b))
+                    yn.overflow = yo
+                    if yoc == 0 {
+                        ye2 := &yo[0][1]
+                        *ye2 = *xen
+                        ye2.next = ye.next
+                        ye.next = 1
+                        yn.overflowLowestFree = 2
+                    } else {
+                        ye2 := &yo[yoc][0]
+                        *ye2 = *xen
+                        ye2.next = ye.next
+                        ye.next = yoc << b
+                        yn.overflowLowestFree = yoc<<b + 1
+                    }
+                    yoc++
+                }
+            }
+            yn.used++
+            if xe.next < xn.overflowLowestFree {
+                xn.overflowLowestFree = xe.next
+            }
+            xe.next = xen.next
+            xen.blockID = 0
+            xen.next = 0
+            xn.used--
         }
     }
     // Now any matching entries left are non-overflow entries. Move those.
     for i := uint32(0); i <= lm; i++ {
-        ae := &aes[i]
-        if ae.blockID == 0 || ae.keyA&hm == 0 {
+        xe := &xes[i]
+        if xe.blockID == 0 {
             continue
         }
-        be := &bes[i]
-        if be.blockID == 0 {
-            *be = *ae
-            be.next = 0
+        if xe.keyA&hm == 0 {
+            if xn == an {
+                continue
+            }
         } else {
-            if bn.overflowLowestFree != 0 {
-                be2 := &bo[bn.overflowLowestFree>>b][bn.overflowLowestFree&lm]
-                *be2 = *ae
-                be2.next = be.next
-                be.next = bn.overflowLowestFree
-                bn.overflowLowestFree++
-                if bn.overflowLowestFree&lm == 0 {
-                    bn.overflowLowestFree = 0
+            if xn == bn {
+                continue
+            }
+        }
+        if yes == nil {
+            yes = make([]{{.t}}LocMapEntry, len(xn.entries))
+            yn.entries = yes
+            yn.entriesLocks = make([]sync.RWMutex, len(xn.entriesLocks))
+        }
+        ye := &yes[i]
+        if ye.blockID == 0 {
+            *ye = *xe
+            ye.next = 0
+        } else {
+            if yn.overflowLowestFree != 0 {
+                ye2 := &yo[yn.overflowLowestFree>>b][yn.overflowLowestFree&lm]
+                *ye2 = *xe
+                ye2.next = ye.next
+                ye.next = yn.overflowLowestFree
+                yn.overflowLowestFree++
+                if yn.overflowLowestFree&lm == 0 {
+                    yn.overflowLowestFree = 0
                 }
             } else {
-                bo = append(bo, make([]{{.t}}LocMapEntry, 1<<b))
-                bn.overflow = bo
-                if boc == 0 {
-                    be2 := &bo[0][1]
-                    *be2 = *ae
-                    be2.next = be.next
-                    be.next = 1
-                    bn.overflowLowestFree = 2
+                yo = append(yo, make([]{{.t}}LocMapEntry, 1<<b))
+                yn.overflow = yo
+                if yoc == 0 {
+                    ye2 := &yo[0][1]
+                    *ye2 = *xe
+                    ye2.next = ye.next
+                    ye.next = 1
+                    yn.overflowLowestFree = 2
                 } else {
-                    be2 := &bo[boc][0]
-                    *be2 = *ae
-                    be2.next = be.next
-                    be.next = boc << b
-                    bn.overflowLowestFree = boc<<b + 1
+                    ye2 := &yo[yoc][0]
+                    *ye2 = *xe
+                    ye2.next = ye.next
+                    ye.next = yoc << b
+                    yn.overflowLowestFree = yoc<<b + 1
                 }
-                boc++
+                yoc++
             }
         }
-        bn.used++
-        if ae.next == 0 {
-            ae.blockID = 0
+        yn.used++
+        if xe.next == 0 {
+            xe.blockID = 0
         } else {
-            if ae.next < an.overflowLowestFree {
-                an.overflowLowestFree = ae.next
+            if xe.next < xn.overflowLowestFree {
+                xn.overflowLowestFree = xe.next
             }
-            aen := &ao[ae.next>>b][ae.next&lm]
-            *ae = *aen
-            aen.blockID = 0
-            aen.next = 0
+            xen := &xo[xe.next>>b][xe.next&lm]
+            *xe = *xen
+            xen.blockID = 0
+            xen.next = 0
         }
-        an.used--
+        xn.used--
     }
     n.lock.Unlock()
     n.resizingLock.Lock()

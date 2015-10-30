@@ -1,11 +1,10 @@
 # ValueLocMap
 ## Development Repository
 
-Package valuelocmap provides a concurrency-safe data structure that maps
-keys to value locations. A key is 128 bits and is specified using two
-uint64s (keyA, keyB). A value location is specified using a blockID, offset,
-and length triplet. Each mapping is assigned a timestamp and the greatest
-timestamp wins.
+Package locmap provides a concurrency-safe data structure that maps keys to
+value locations. A key is 128 bits and is specified using two uint64s (keyA,
+keyB). A value location is specified using a blockID, offset, and length
+triplet. Each mapping is assigned a timestamp and the greatest timestamp wins.
 
 The timestamp usually has some number of the lowest bits in use for state
 information such as active and inactive entries. For example, the lowest bit
@@ -25,7 +24,7 @@ There is also a modified form of the data structure called GroupLocMap that
 expands the primary key of the map to two 128 bit keys and offers a GetGroup
 method which retrieves all matching items for the first key.
 
-[API Documentation](http://godoc.org/github.com/gholt/valuelocmap)
+[API Documentation](http://godoc.org/github.com/gholt/locmap)
 
 This is the latest development area for the package.  
 Eventually a stable version of the package will be established but, for now,

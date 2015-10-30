@@ -5,7 +5,7 @@
 // You'll need a good amount of RAM too. The above uses about 8G of memory
 // and takes about 5 minutes to run on my MacBook Pro Retina 15".
 
-package valuelocmap
+package locmap
 
 import (
 	"encoding/binary"

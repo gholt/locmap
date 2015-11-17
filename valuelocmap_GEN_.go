@@ -878,7 +878,7 @@ func (locmap *valueLocMap) discard(start uint64, stop uint64, mask uint64, n *va
 		}
 		return
 	}
-	if n.used == 0 {
+	if atomic.LoadUint32(&n.used) == 0 {
 		n.lock.RUnlock()
 		return
 	}
@@ -979,7 +979,7 @@ func (locmap *valueLocMap) scanCallback(start uint64, stop uint64, mask uint64, 
 		}
 		return max, stopped, more
 	}
-	if n.used == 0 {
+	if atomic.LoadUint32(&n.used) == 0 {
 		n.lock.RUnlock()
 		return max, stop, false
 	}
@@ -1111,7 +1111,7 @@ func (locmap *valueLocMap) stats(s *ValueLocMapStats, n *valueLocMapNode, depth 
 			b.lock.RLock() // Will be released by stats
 			locmap.stats(s, b, depth+1)
 		}
-	} else if n.used == 0 {
+	} else if atomic.LoadUint32(&n.used) == 0 {
 		if s.statsDebug {
 			s.allocedEntries += uint64(len(n.entries))
 			n.overflowLock.RLock()

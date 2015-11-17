@@ -890,7 +890,7 @@ func (locmap *groupLocMap) discard(start uint64, stop uint64, mask uint64, n *gr
 		}
 		return
 	}
-	if n.used == 0 {
+	if atomic.LoadUint32(&n.used) == 0 {
 		n.lock.RUnlock()
 		return
 	}
@@ -991,7 +991,7 @@ func (locmap *groupLocMap) scanCallback(start uint64, stop uint64, mask uint64, 
 		}
 		return max, stopped, more
 	}
-	if n.used == 0 {
+	if atomic.LoadUint32(&n.used) == 0 {
 		n.lock.RUnlock()
 		return max, stop, false
 	}
@@ -1123,7 +1123,7 @@ func (locmap *groupLocMap) stats(s *GroupLocMapStats, n *groupLocMapNode, depth 
 			b.lock.RLock() // Will be released by stats
 			locmap.stats(s, b, depth+1)
 		}
-	} else if n.used == 0 {
+	} else if atomic.LoadUint32(&n.used) == 0 {
 		if s.statsDebug {
 			s.allocedEntries += uint64(len(n.entries))
 			n.overflowLock.RLock()

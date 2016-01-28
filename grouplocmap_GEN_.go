@@ -74,6 +74,8 @@ type GroupLocMap interface {
 	// because they are subject to change based on implementation. They are
 	// only provided when stats.String() is called.
 	Stats(debug bool) *GroupLocMapStats
+	// Clear discards all items from the GroupLocMap.
+	Clear()
 }
 
 // GroupLocMapConfig represents the set of values for configuring a
@@ -1083,6 +1085,18 @@ func (locmap *groupLocMap) SetInactiveMask(mask uint64) {
 	locmap.inactiveMask = mask
 }
 
+func (locmap *groupLocMap) Clear() {
+	for i := 0; i < len(locmap.roots); i++ {
+		locmap.roots[i].lock.Lock()
+	}
+	for i := 0; i < len(locmap.roots); i++ {
+		locmap.roots[i].entries = nil
+	}
+	for i := 0; i < len(locmap.roots); i++ {
+		locmap.roots[i].lock.Unlock()
+	}
+}
+
 func (locmap *groupLocMap) Stats(debug bool) *GroupLocMapStats {
 	s := &GroupLocMapStats{
 		inactiveMask:      locmap.inactiveMask,
@@ -1148,40 +1162,42 @@ func (locmap *groupLocMap) stats(s *GroupLocMapStats, n *groupLocMapNode, depth 
 		lm := locmap.lowMask
 		es := n.entries
 		ol := &n.overflowLock
-		for i := uint32(0); i <= lm; i++ {
-			e := &es[i]
-			l := &n.entriesLocks[i&locmap.entriesLockMask]
-			o := false
-			l.RLock()
-			if e.blockID == 0 {
-				l.RUnlock()
-				continue
-			}
-			for {
-				if s.statsDebug {
-					s.usedEntries++
-					if o {
-						s.usedInOverflow++
-					}
-					if e.timestamp&s.inactiveMask == 0 {
+		if es != nil {
+			for i := uint32(0); i <= lm; i++ {
+				e := &es[i]
+				l := &n.entriesLocks[i&locmap.entriesLockMask]
+				o := false
+				l.RLock()
+				if e.blockID == 0 {
+					l.RUnlock()
+					continue
+				}
+				for {
+					if s.statsDebug {
+						s.usedEntries++
+						if o {
+							s.usedInOverflow++
+						}
+						if e.timestamp&s.inactiveMask == 0 {
+							s.ActiveCount++
+							s.ActiveBytes += uint64(e.length)
+						} else {
+							s.inactive++
+						}
+					} else if e.timestamp&s.inactiveMask == 0 {
 						s.ActiveCount++
 						s.ActiveBytes += uint64(e.length)
-					} else {
-						s.inactive++
 					}
-				} else if e.timestamp&s.inactiveMask == 0 {
-					s.ActiveCount++
-					s.ActiveBytes += uint64(e.length)
+					if e.next == 0 {
+						break
+					}
+					ol.RLock()
+					e = &n.overflow[e.next>>b][e.next&lm]
+					ol.RUnlock()
+					o = true
 				}
-				if e.next == 0 {
-					break
-				}
-				ol.RLock()
-				e = &n.overflow[e.next>>b][e.next&lm]
-				ol.RUnlock()
-				o = true
+				l.RUnlock()
 			}
-			l.RUnlock()
 		}
 		n.lock.RUnlock()
 	}

@@ -109,11 +109,11 @@ func resolveGroupLocMapConfig(c *GroupLocMapConfig) *GroupLocMapConfig {
 	if c != nil {
 		*cfg = *c
 	}
-	if env := os.Getenv("GroupLOCMAP_WORKERS"); env != "" {
+	if env := os.Getenv("GROUPLOCMAP_WORKERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.Workers = val
 		}
-	} else if env = os.Getenv("GroupSTORE_WORKERS"); env != "" {
+	} else if env = os.Getenv("GROUPSTORE_WORKERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.Workers = val
 		}
@@ -124,7 +124,7 @@ func resolveGroupLocMapConfig(c *GroupLocMapConfig) *GroupLocMapConfig {
 	if cfg.Workers < 1 { // GOMAXPROCS should always give >= 1, but in case
 		cfg.Workers = 1
 	}
-	if env := os.Getenv("GroupLOCMAP_ROOTS"); env != "" {
+	if env := os.Getenv("GROUPLOCMAP_ROOTS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.Roots = val
 		}
@@ -136,7 +136,7 @@ func resolveGroupLocMapConfig(c *GroupLocMapConfig) *GroupLocMapConfig {
 	if cfg.Roots < 2 {
 		cfg.Roots = 2
 	}
-	if env := os.Getenv("GroupLOCMAP_PAGESIZE"); env != "" {
+	if env := os.Getenv("GROUPLOCMAP_PAGESIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.PageSize = val
 		}
@@ -150,7 +150,7 @@ func resolveGroupLocMapConfig(c *GroupLocMapConfig) *GroupLocMapConfig {
 	if cfg.PageSize < pageSizeFloor {
 		cfg.PageSize = pageSizeFloor
 	}
-	if env := os.Getenv("GroupLOCMAP_SPLITMULTIPLIER"); env != "" {
+	if env := os.Getenv("GROUPLOCMAP_SPLITMULTIPLIER"); env != "" {
 		if val, err := strconv.ParseFloat(env, 64); err == nil {
 			cfg.SplitMultiplier = val
 		}

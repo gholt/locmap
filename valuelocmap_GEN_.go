@@ -106,11 +106,11 @@ func resolveValueLocMapConfig(c *ValueLocMapConfig) *ValueLocMapConfig {
 	if c != nil {
 		*cfg = *c
 	}
-	if env := os.Getenv("ValueLOCMAP_WORKERS"); env != "" {
+	if env := os.Getenv("VALUELOCMAP_WORKERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.Workers = val
 		}
-	} else if env = os.Getenv("ValueSTORE_WORKERS"); env != "" {
+	} else if env = os.Getenv("VALUESTORE_WORKERS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.Workers = val
 		}
@@ -121,7 +121,7 @@ func resolveValueLocMapConfig(c *ValueLocMapConfig) *ValueLocMapConfig {
 	if cfg.Workers < 1 { // GOMAXPROCS should always give >= 1, but in case
 		cfg.Workers = 1
 	}
-	if env := os.Getenv("ValueLOCMAP_ROOTS"); env != "" {
+	if env := os.Getenv("VALUELOCMAP_ROOTS"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.Roots = val
 		}
@@ -133,7 +133,7 @@ func resolveValueLocMapConfig(c *ValueLocMapConfig) *ValueLocMapConfig {
 	if cfg.Roots < 2 {
 		cfg.Roots = 2
 	}
-	if env := os.Getenv("ValueLOCMAP_PAGESIZE"); env != "" {
+	if env := os.Getenv("VALUELOCMAP_PAGESIZE"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.PageSize = val
 		}
@@ -147,7 +147,7 @@ func resolveValueLocMapConfig(c *ValueLocMapConfig) *ValueLocMapConfig {
 	if cfg.PageSize < pageSizeFloor {
 		cfg.PageSize = pageSizeFloor
 	}
-	if env := os.Getenv("ValueLOCMAP_SPLITMULTIPLIER"); env != "" {
+	if env := os.Getenv("VALUELOCMAP_SPLITMULTIPLIER"); env != "" {
 		if val, err := strconv.ParseFloat(env, 64); err == nil {
 			cfg.SplitMultiplier = val
 		}

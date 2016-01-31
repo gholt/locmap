@@ -109,11 +109,11 @@ func resolve{{.T}}LocMapConfig(c *{{.T}}LocMapConfig) *{{.T}}LocMapConfig {
     if c != nil {
         *cfg = *c
     }
-    if env := os.Getenv("{{.T}}LOCMAP_WORKERS"); env != "" {
+    if env := os.Getenv("{{.TT}}LOCMAP_WORKERS"); env != "" {
         if val, err := strconv.Atoi(env); err == nil {
             cfg.Workers = val
         }
-    } else if env = os.Getenv("{{.T}}STORE_WORKERS"); env != "" {
+    } else if env = os.Getenv("{{.TT}}STORE_WORKERS"); env != "" {
         if val, err := strconv.Atoi(env); err == nil {
             cfg.Workers = val
         }
@@ -124,7 +124,7 @@ func resolve{{.T}}LocMapConfig(c *{{.T}}LocMapConfig) *{{.T}}LocMapConfig {
     if cfg.Workers < 1 { // GOMAXPROCS should always give >= 1, but in case
         cfg.Workers = 1
     }
-    if env := os.Getenv("{{.T}}LOCMAP_ROOTS"); env != "" {
+    if env := os.Getenv("{{.TT}}LOCMAP_ROOTS"); env != "" {
         if val, err := strconv.Atoi(env); err == nil {
             cfg.Roots = val
         }
@@ -136,7 +136,7 @@ func resolve{{.T}}LocMapConfig(c *{{.T}}LocMapConfig) *{{.T}}LocMapConfig {
     if cfg.Roots < 2 {
         cfg.Roots = 2
     }
-    if env := os.Getenv("{{.T}}LOCMAP_PAGESIZE"); env != "" {
+    if env := os.Getenv("{{.TT}}LOCMAP_PAGESIZE"); env != "" {
         if val, err := strconv.Atoi(env); err == nil {
             cfg.PageSize = val
         }
@@ -150,7 +150,7 @@ func resolve{{.T}}LocMapConfig(c *{{.T}}LocMapConfig) *{{.T}}LocMapConfig {
     if cfg.PageSize < pageSizeFloor {
         cfg.PageSize = pageSizeFloor
     }
-    if env := os.Getenv("{{.T}}LOCMAP_SPLITMULTIPLIER"); env != "" {
+    if env := os.Getenv("{{.TT}}LOCMAP_SPLITMULTIPLIER"); env != "" {
         if val, err := strconv.ParseFloat(env, 64); err == nil {
             cfg.SplitMultiplier = val
         }

@@ -537,71 +537,76 @@ func (locmap *valueLocMap) merge(n *valueLocMapNode) {
 		n.resizingLock.Unlock()
 		return
 	}
-	b := locmap.bits
-	lm := locmap.lowMask
-	aes := an.entries
-	ao := an.overflow
-	aoc := uint32(len(ao))
-	bo := bn.overflow
-	bes := bn.entries
-	for i := uint32(0); i <= lm; i++ {
-		be := &bes[i]
-		if be.blockID == 0 {
-			continue
-		}
-		for {
-			ae := &aes[uint32(be.keyB)&lm]
-			if ae.blockID == 0 {
-				*ae = *be
-				ae.next = 0
-			} else {
-				if an.overflowLowestFree != 0 {
-					oA := an.overflowLowestFree >> b
-					oB := an.overflowLowestFree & lm
-					ae2 := &ao[oA][oB]
-					*ae2 = *be
-					ae2.next = ae.next
-					ae.next = an.overflowLowestFree
-					an.overflowLowestFree = 0
-					for {
-						if oB == lm {
-							oA++
-							if oA == aoc {
+	if an.entries == nil || an.used < bn.used {
+		an, bn = bn, an
+	}
+	if bn.entries != nil && bn.used > 0 {
+		b := locmap.bits
+		lm := locmap.lowMask
+		aes := an.entries
+		ao := an.overflow
+		aoc := uint32(len(ao))
+		bo := bn.overflow
+		bes := bn.entries
+		for i := uint32(0); i <= lm; i++ {
+			be := &bes[i]
+			if be.blockID == 0 {
+				continue
+			}
+			for {
+				ae := &aes[uint32(be.keyB)&lm]
+				if ae.blockID == 0 {
+					*ae = *be
+					ae.next = 0
+				} else {
+					if an.overflowLowestFree != 0 {
+						oA := an.overflowLowestFree >> b
+						oB := an.overflowLowestFree & lm
+						ae2 := &ao[oA][oB]
+						*ae2 = *be
+						ae2.next = ae.next
+						ae.next = an.overflowLowestFree
+						an.overflowLowestFree = 0
+						for {
+							if oB == lm {
+								oA++
+								if oA == aoc {
+									break
+								}
+								oB = 0
+							} else {
+								oB++
+							}
+							if ao[oA][oB].blockID == 0 {
+								an.overflowLowestFree = oA<<b | oB
 								break
 							}
-							oB = 0
-						} else {
-							oB++
 						}
-						if ao[oA][oB].blockID == 0 {
-							an.overflowLowestFree = oA<<b | oB
-							break
-						}
-					}
-				} else {
-					ao = append(ao, make([]valueLocMapEntry, 1<<b))
-					an.overflow = ao
-					if aoc == 0 {
-						ae2 := &ao[0][1]
-						*ae2 = *be
-						ae2.next = ae.next
-						ae.next = 1
-						an.overflowLowestFree = 2
 					} else {
-						ae2 := &ao[aoc][0]
-						*ae2 = *be
-						ae2.next = ae.next
-						ae.next = aoc << b
-						an.overflowLowestFree = aoc<<b + 1
+						ao = append(ao, make([]valueLocMapEntry, 1<<b))
+						an.overflow = ao
+						if aoc == 0 {
+							ae2 := &ao[0][1]
+							*ae2 = *be
+							ae2.next = ae.next
+							ae.next = 1
+							an.overflowLowestFree = 2
+						} else {
+							ae2 := &ao[aoc][0]
+							*ae2 = *be
+							ae2.next = ae.next
+							ae.next = aoc << b
+							an.overflowLowestFree = aoc<<b + 1
+						}
+						aoc++
 					}
-					aoc++
 				}
+				an.used++
+				if be.next == 0 {
+					break
+				}
+				be = &bo[be.next>>b][be.next&lm]
 			}
-			an.used++
-			if be.next == 0 {
-				break
-			}
-			be = &bo[be.next>>b][be.next&lm]
 		}
 	}
 	n.a = nil

@@ -71,6 +71,13 @@ It's easy to wrap my head around, no ASTs being wandered through, no trying to
 indirectly motivate the generator to do what I want, just plain text constructs
 to reason about.
 
+An ongoing annoyance, however, is that reported line numbers from panics refer
+to the generated file, not the source templatized file. I don't know how many
+times I've fixed a bug only to find out I need to migrate that fix back to the
+template. I don't know of any elegant way around that, except maybe making my
+editor yell at me if I try to modify a generated file (I embed `_GEN_`
+somewhere in the file name for all of them).
+
 Looking forward I hope that some official tool is created around this need. Or
 maybe someone will recommend or I'll run across a better tool than GoT.
 

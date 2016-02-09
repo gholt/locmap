@@ -1,8 +1,8 @@
 # ValueLocMap
 ## Development Repository
 
-*Experimental: No stable version of this package yet exists; it is still in
-early development.*
+**Experimental: No stable version of this package yet exists; it is still in
+early development.**
 
 Package locmap provides a concurrency-safe data structure that maps keys to
 value locations. A key is 128 bits and is specified using two uint64s (keyA,

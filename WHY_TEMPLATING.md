@@ -1,5 +1,7 @@
 # Why Templating?
 
+> Copyright See AUTHORS. All rights reserved.  
+
 LocMap uses templated source files to generate specific *flavors* of itself,
 ValueLocMap and GroupLocMap. So, why not just use `interface{}` for the
 internal slices that hold entries? Well, the tradeoff in less complex and less

@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"gopkg.in/gholt/brimtext.v1"
+	"github.com/gholt/brimtext"
 )
 
 // ValueLocMap is an interface for tracking the mappings from keys to the

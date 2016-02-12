@@ -14,7 +14,7 @@ import (
     "sync"
     "testing"
 
-    "gopkg.in/gholt/brimutil.v1"
+    "github.com/gholt/brimio"
 )
 
 func Test{{.T}}ExerciseSplitMergeLong(t *testing.T) {
@@ -40,7 +40,7 @@ func Test{{.T}}ExerciseSplitMergeLong(t *testing.T) {
     keyspaces := make([][]byte, keysetCount)
     for i := 0; i < keysetCount; i++ {
         keyspaces[i] = make([]byte, count*16)
-        brimutil.NewSeededScrambled(int64(i)).Read(keyspaces[i])
+        brimio.NewSeededScrambled(int64(i)).Read(keyspaces[i])
         // since scrambled doesn't guarantee uniqueness, we do that in the
         // middle of each key.
         for j := uint32(0); j < uint32(count); j++ {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"gopkg.in/gholt/brimutil.v1"
+	"github.com/gholt/brimio"
 )
 
 func TestValueNewRoots(t *testing.T) {
@@ -986,7 +986,7 @@ func TestValueStatsBasic(t *testing.T) {
 	// SplitMultiplier is set low to get splits to happen quicker.
 	locmap := NewValueLocMap(&ValueLocMapConfig{Workers: 1, Roots: 1, PageSize: 512, SplitMultiplier: 1}).(*valueLocMap)
 	keyspace := make([]byte, count*16)
-	brimutil.NewSeededScrambled(int64(seed)).Read(keyspace)
+	brimio.NewSeededScrambled(int64(seed)).Read(keyspace)
 	// since scrambled doesn't guarantee uniqueness, we do that in the middle
 	// of each key.
 	for j := uint32(0); j < uint32(count); j++ {
@@ -1067,7 +1067,7 @@ func TestValueExerciseSplitMergeDiscard(t *testing.T) {
 		t.Fatal(locmap.roots[0].mergeLevel)
 	}
 	keyspace := make([]byte, count*16)
-	brimutil.NewSeededScrambled(int64(seed)).Read(keyspace)
+	brimio.NewSeededScrambled(int64(seed)).Read(keyspace)
 	// since scrambled doesn't guarantee uniqueness, we do that in the middle
 	// of each key.
 	for j := uint32(0); j < uint32(count); j++ {

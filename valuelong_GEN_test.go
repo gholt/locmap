@@ -2,8 +2,8 @@
 // Since this has concurrency tests, you probably want to run with something
 // like:
 // $ long_test=true go test -cpu=1,3,7
-// You'll need a good amount of RAM too. The above uses about 8G of memory
-// and takes about 5 minutes to run on my MacBook Pro Retina 15".
+// The above command uses about 2.5G of memory and takes a bit over 3 minutes
+// to run on my MacBook Pro Retina 15".
 
 package locmap
 
@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"gopkg.in/gholt/brimutil.v1"
+	"github.com/gholt/brimio"
 )
 
 func TestValueExerciseSplitMergeLong(t *testing.T) {
@@ -40,7 +40,7 @@ func TestValueExerciseSplitMergeLong(t *testing.T) {
 	keyspaces := make([][]byte, keysetCount)
 	for i := 0; i < keysetCount; i++ {
 		keyspaces[i] = make([]byte, count*16)
-		brimutil.NewSeededScrambled(int64(i)).Read(keyspaces[i])
+		brimio.NewSeededScrambled(int64(i)).Read(keyspaces[i])
 		// since scrambled doesn't guarantee uniqueness, we do that in the
 		// middle of each key.
 		for j := uint32(0); j < uint32(count); j++ {

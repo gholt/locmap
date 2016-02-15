@@ -86,7 +86,7 @@ func TestGroupExerciseSplitMergeLong(t *testing.T) {
 			for nB := uint64(0); nB < 5; nB++ {
 				found := false
 				for _, item := range items {
-					if item.NameKeyA == nA && item.NameKeyB == nB {
+					if item.ChildKeyA == nA && item.ChildKeyB == nB {
 						found = true
 						break
 					}
@@ -138,7 +138,7 @@ func TestGroupExerciseSplitMergeLong(t *testing.T) {
 			}
 			if j%100 == 33 {
 				uselessCounter := 0
-				stopped, more := locmap.ScanCallback(0, math.MaxUint64, 0, 0, math.MaxUint64, math.MaxUint64, func(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp uint64, length uint32) bool {
+				stopped, more := locmap.ScanCallback(0, math.MaxUint64, 0, 0, math.MaxUint64, math.MaxUint64, func(keyA uint64, keyB uint64, childKeyA uint64, childKeyB uint64, timestamp uint64, length uint32) bool {
 					uselessCounter++
 					return true
 				})

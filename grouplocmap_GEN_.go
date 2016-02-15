@@ -16,8 +16,8 @@ import (
 // GroupLocMap is an interface for tracking the mappings from keys to the
 // locations of their values.
 type GroupLocMap interface {
-	// Get returns timestamp, blockID, offset, length for keyA, keyB, nameKeyA, nameKeyB.
-	Get(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64) (timestamp uint64, blockID uint32, offset uint32, length uint32)
+	// Get returns timestamp, blockID, offset, length for keyA, keyB, childKeyA, childKeyB.
+	Get(keyA uint64, keyB uint64, childKeyA uint64, childKeyB uint64) (timestamp uint64, blockID uint32, offset uint32, length uint32)
 
 	// GetGroup returns all items that match keyA, keyB.
 	GetGroup(keyA uint64, keyB uint64) []*GroupLocMapItem
@@ -30,7 +30,7 @@ type GroupLocMap interface {
 	// location that moved from memory to disk, for example). Setting an item
 	// to blockID == 0 removes it from the mapping if the timestamp stored is
 	// less than (or equal to if evenIfSameTimestamp) the timestamp passed in.
-	Set(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
+	Set(keyA uint64, keyB uint64, childKeyA uint64, childKeyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) (previousTimestamp uint64)
 	// Discard removes any items in the start:stop (inclusive) range whose
 	// timestamp & mask != 0.
 	Discard(start uint64, stop uint64, mask uint64)
@@ -60,7 +60,7 @@ type GroupLocMap interface {
 	// Additionally, the callback itself may abort the scan early by returning
 	// false, in which case the (stopped, more) return values are not
 	// particularly useful.
-	ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp uint64, length uint32) bool) (stopped uint64, more bool)
+	ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, childKeyA uint64, childKeyB uint64, timestamp uint64, length uint32) bool) (stopped uint64, more bool)
 	// SetInactiveMask defines the mask to use with a timestamp to determine if
 	// a location is inactive (deleted, locally removed, etc.) and is used by
 	// Stats to determine what to count for its ActiveCount and ActiveBytes.
@@ -196,8 +196,8 @@ type groupLocMapEntry struct {
 	keyA uint64
 	keyB uint64
 
-	nameKeyA uint64
-	nameKeyB uint64
+	childKeyA uint64
+	childKeyB uint64
 
 	timestamp uint64
 	blockID   uint32
@@ -352,7 +352,7 @@ func (locmap *groupLocMap) split(n *groupLocMapNode) {
 				yn.entries = yes
 				yn.entriesLocks = make([]sync.RWMutex, len(xn.entriesLocks))
 			}
-			ye := &yes[uint32(xen.keyB^xen.nameKeyA)&lm]
+			ye := &yes[uint32(xen.keyB^xen.childKeyA)&lm]
 			if ye.blockID == 0 {
 				*ye = *xen
 				ye.next = 0
@@ -560,7 +560,7 @@ func (locmap *groupLocMap) merge(n *groupLocMapNode) {
 				continue
 			}
 			for {
-				ae := &aes[uint32(be.keyB^be.nameKeyA)&lm]
+				ae := &aes[uint32(be.keyB^be.childKeyA)&lm]
 				if ae.blockID == 0 {
 					*ae = *be
 					ae.next = 0
@@ -636,7 +636,7 @@ func (locmap *groupLocMap) merge(n *groupLocMapNode) {
 	n.resizingLock.Unlock()
 }
 
-func (locmap *groupLocMap) Get(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64) (uint64, uint32, uint32, uint32) {
+func (locmap *groupLocMap) Get(keyA uint64, keyB uint64, childKeyA uint64, childKeyB uint64) (uint64, uint32, uint32, uint32) {
 	n := &locmap.roots[keyA>>locmap.rootShift]
 	n.lock.RLock()
 	for {
@@ -658,7 +658,7 @@ func (locmap *groupLocMap) Get(keyA uint64, keyB uint64, nameKeyA uint64, nameKe
 	}
 	b := locmap.bits
 	lm := locmap.lowMask
-	i := uint32(keyB^nameKeyA) & lm
+	i := uint32(keyB^childKeyA) & lm
 	l := &n.entriesLocks[i&locmap.entriesLockMask]
 	ol := &n.overflowLock
 	e := &n.entries[i]
@@ -669,7 +669,7 @@ func (locmap *groupLocMap) Get(keyA uint64, keyB uint64, nameKeyA uint64, nameKe
 		return 0, 0, 0, 0
 	}
 	for {
-		if e.keyA == keyA && e.keyB == keyB && e.nameKeyA == nameKeyA && e.nameKeyB == nameKeyB {
+		if e.keyA == keyA && e.keyB == keyB && e.childKeyA == childKeyA && e.childKeyB == childKeyB {
 			rt := e.timestamp
 			rb := e.blockID
 			ro := e.offset
@@ -690,7 +690,7 @@ func (locmap *groupLocMap) Get(keyA uint64, keyB uint64, nameKeyA uint64, nameKe
 	return 0, 0, 0, 0
 }
 
-func (locmap *groupLocMap) Set(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
+func (locmap *groupLocMap) Set(keyA uint64, keyB uint64, childKeyA uint64, childKeyB uint64, timestamp uint64, blockID uint32, offset uint32, length uint32, evenIfSameTimestamp bool) uint64 {
 	n := &locmap.roots[keyA>>locmap.rootShift]
 	var pn *groupLocMapNode
 	n.lock.RLock()
@@ -720,7 +720,7 @@ func (locmap *groupLocMap) Set(keyA uint64, keyB uint64, nameKeyA uint64, nameKe
 	}
 	b := locmap.bits
 	lm := locmap.lowMask
-	i := uint32(keyB^nameKeyA) & lm
+	i := uint32(keyB^childKeyA) & lm
 	l := &n.entriesLocks[i&locmap.entriesLockMask]
 	ol := &n.overflowLock
 	e := &n.entries[i]
@@ -729,7 +729,7 @@ func (locmap *groupLocMap) Set(keyA uint64, keyB uint64, nameKeyA uint64, nameKe
 	if e.blockID != 0 {
 		var f uint32
 		for {
-			if e.keyA == keyA && e.keyB == keyB && e.nameKeyA == nameKeyA && e.nameKeyB == nameKeyB {
+			if e.keyA == keyA && e.keyB == keyB && e.childKeyA == childKeyA && e.childKeyB == childKeyB {
 				t := e.timestamp
 				if e.timestamp > timestamp || (e.timestamp == timestamp && !evenIfSameTimestamp) {
 					l.Unlock()
@@ -799,8 +799,8 @@ func (locmap *groupLocMap) Set(keyA uint64, keyB uint64, nameKeyA uint64, nameKe
 		e.keyA = keyA
 		e.keyB = keyB
 
-		e.nameKeyA = nameKeyA
-		e.nameKeyB = nameKeyB
+		e.childKeyA = childKeyA
+		e.childKeyB = childKeyB
 
 		e.timestamp = timestamp
 		e.blockID = blockID
@@ -849,8 +849,8 @@ func (locmap *groupLocMap) Set(keyA uint64, keyB uint64, nameKeyA uint64, nameKe
 		e.keyA = keyA
 		e.keyB = keyB
 
-		e.nameKeyA = nameKeyA
-		e.nameKeyB = nameKeyB
+		e.childKeyA = childKeyA
+		e.childKeyB = childKeyB
 
 		e.timestamp = timestamp
 		e.blockID = blockID
@@ -962,7 +962,7 @@ func (locmap *groupLocMap) discard(start uint64, stop uint64, mask uint64, n *gr
 	n.lock.RUnlock()
 }
 
-func (locmap *groupLocMap) ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp uint64, length uint32) bool) (uint64, bool) {
+func (locmap *groupLocMap) ScanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, childKeyA uint64, childKeyB uint64, timestamp uint64, length uint32) bool) (uint64, bool) {
 	var stopped uint64
 	var more bool
 	for i := 0; i < len(locmap.roots); i++ {
@@ -977,7 +977,7 @@ func (locmap *groupLocMap) ScanCallback(start uint64, stop uint64, mask uint64, 
 }
 
 // Will call n.lock.RUnlock()
-func (locmap *groupLocMap) scanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, nameKeyA uint64, nameKeyB uint64, timestamp uint64, length uint32) bool, n *groupLocMapNode) (uint64, uint64, bool) {
+func (locmap *groupLocMap) scanCallback(start uint64, stop uint64, mask uint64, notMask uint64, cutoff uint64, max uint64, callback func(keyA uint64, keyB uint64, childKeyA uint64, childKeyB uint64, timestamp uint64, length uint32) bool, n *groupLocMapNode) (uint64, uint64, bool) {
 	if start > n.rangeStop || stop < n.rangeStart {
 		n.lock.RUnlock()
 		return max, stop, false
@@ -1024,7 +1024,7 @@ func (locmap *groupLocMap) scanCallback(start uint64, stop uint64, mask uint64, 
 						more = true
 						break
 					}
-					if !callback(e.keyA, e.keyB, e.nameKeyA, e.nameKeyB, e.timestamp, e.length) {
+					if !callback(e.keyA, e.keyB, e.childKeyA, e.childKeyB, e.timestamp, e.length) {
 						stopped = n.rangeStart
 						more = true
 						break
@@ -1065,7 +1065,7 @@ func (locmap *groupLocMap) scanCallback(start uint64, stop uint64, mask uint64, 
 					more = true
 					break
 				}
-				if !callback(e.keyA, e.keyB, e.nameKeyA, e.nameKeyB, e.timestamp, e.length) {
+				if !callback(e.keyA, e.keyB, e.childKeyA, e.childKeyB, e.timestamp, e.length) {
 					stopped = n.rangeStart
 					more = true
 					break
@@ -1266,8 +1266,8 @@ func (s *GroupLocMapStats) String() string {
 }
 
 type GroupLocMapItem struct {
-	NameKeyA  uint64
-	NameKeyB  uint64
+	ChildKeyA uint64
+	ChildKeyB uint64
 	Timestamp uint64
 	BlockID   uint32
 	Offset    uint32
@@ -1307,8 +1307,8 @@ func (locmap *groupLocMap) GetGroup(keyA uint64, keyB uint64) []*GroupLocMapItem
 			for {
 				if e.keyA == keyA && e.keyB == keyB {
 					rv = append(rv, &GroupLocMapItem{
-						NameKeyA:  e.nameKeyA,
-						NameKeyB:  e.nameKeyB,
+						ChildKeyA: e.childKeyA,
+						ChildKeyB: e.childKeyB,
 						Timestamp: e.timestamp,
 						BlockID:   e.blockID,
 						Offset:    e.offset,

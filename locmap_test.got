@@ -727,7 +727,7 @@ func Test{{.T}}ScanCallbackBasic(t *testing.T) {
     length1 := uint32(3)
     locmap.Set(keyA1, keyB1{{if eq .t "group"}}, 0, 0{{end}}, timestamp1, blockID1, offset1, length1, false)
     good := false
-    stopped, more := locmap.ScanCallback(0, math.MaxUint64, 0, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, nameKeyA2 uint64, nameKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
+    stopped, more := locmap.ScanCallback(0, math.MaxUint64, 0, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, childKeyA2 uint64, childKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
         if keyA2 == keyA1 && keyB2 == keyB1 {
             if timestamp2 != timestamp1 {
                 t.Fatal(timestamp2)
@@ -762,7 +762,7 @@ func Test{{.T}}ScanCallbackRangeMiss(t *testing.T) {
     length1 := uint32(3)
     locmap.Set(keyA1, keyB1{{if eq .t "group"}}, 0, 0{{end}}, timestamp1, blockID1, offset1, length1, false)
     good := false
-    stopped, more := locmap.ScanCallback(101, math.MaxUint64, 0, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, nameKeyA2 uint64, nameKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
+    stopped, more := locmap.ScanCallback(101, math.MaxUint64, 0, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, childKeyA2 uint64, childKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
         t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
         return false
     })
@@ -776,7 +776,7 @@ func Test{{.T}}ScanCallbackRangeMiss(t *testing.T) {
         t.Fatal("should not have been more")
     }
     good = false
-    stopped, more = locmap.ScanCallback(0, 99, 0, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, nameKeyA2 uint64, nameKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
+    stopped, more = locmap.ScanCallback(0, 99, 0, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, childKeyA2 uint64, childKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
         t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
         return false
     })
@@ -801,7 +801,7 @@ func Test{{.T}}ScanCallbackMask(t *testing.T) {
     length1 := uint32(3)
     locmap.Set(keyA1, keyB1{{if eq .t "group"}}, 0, 0{{end}}, timestamp1, blockID1, offset1, length1, false)
     good := false
-    stopped, more := locmap.ScanCallback(0, math.MaxUint64, 1, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, nameKeyA2 uint64, nameKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
+    stopped, more := locmap.ScanCallback(0, math.MaxUint64, 1, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, childKeyA2 uint64, childKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
         if keyA2 == keyA1 && keyB2 == keyB1 {
             if timestamp2 != timestamp1 {
                 t.Fatal(timestamp2)
@@ -825,7 +825,7 @@ func Test{{.T}}ScanCallbackMask(t *testing.T) {
         t.Fatal("should not have been more")
     }
     good = false
-    stopped, more = locmap.ScanCallback(0, math.MaxUint64, 2, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, nameKeyA2 uint64, nameKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
+    stopped, more = locmap.ScanCallback(0, math.MaxUint64, 2, 0, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, childKeyA2 uint64, childKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
         t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
         return false
     })
@@ -850,7 +850,7 @@ func Test{{.T}}ScanCallbackNotMask(t *testing.T) {
     length1 := uint32(3)
     locmap.Set(keyA1, keyB1{{if eq .t "group"}}, 0, 0{{end}}, timestamp1, blockID1, offset1, length1, false)
     good := false
-    stopped, more := locmap.ScanCallback(0, math.MaxUint64, 0, 2, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, nameKeyA2 uint64, nameKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
+    stopped, more := locmap.ScanCallback(0, math.MaxUint64, 0, 2, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, childKeyA2 uint64, childKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
         if keyA2 == keyA1 && keyB2 == keyB1 {
             if timestamp2 != timestamp1 {
                 t.Fatal(timestamp2)
@@ -874,7 +874,7 @@ func Test{{.T}}ScanCallbackNotMask(t *testing.T) {
         t.Fatal("should not have been more")
     }
     good = false
-    stopped, more = locmap.ScanCallback(0, math.MaxUint64, 0, 1, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, nameKeyA2 uint64, nameKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
+    stopped, more = locmap.ScanCallback(0, math.MaxUint64, 0, 1, math.MaxUint64, 100, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, childKeyA2 uint64, childKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
         t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
         return false
     })
@@ -899,7 +899,7 @@ func Test{{.T}}ScanCallbackCutoff(t *testing.T) {
     length1 := uint32(3)
     locmap.Set(keyA1, keyB1{{if eq .t "group"}}, 0, 0{{end}}, timestamp1, blockID1, offset1, length1, false)
     good := false
-    stopped, more := locmap.ScanCallback(0, math.MaxUint64, 0, 0, 123, 100, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, nameKeyA2 uint64, nameKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
+    stopped, more := locmap.ScanCallback(0, math.MaxUint64, 0, 0, 123, 100, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, childKeyA2 uint64, childKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
         if keyA2 == keyA1 && keyB2 == keyB1 {
             if timestamp2 != timestamp1 {
                 t.Fatal(timestamp2)
@@ -923,7 +923,7 @@ func Test{{.T}}ScanCallbackCutoff(t *testing.T) {
         t.Fatal("should not have been more")
     }
     good = false
-    stopped, more = locmap.ScanCallback(0, math.MaxUint64, 0, 0, 122, 100, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, nameKeyA2 uint64, nameKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
+    stopped, more = locmap.ScanCallback(0, math.MaxUint64, 0, 0, 122, 100, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, childKeyA2 uint64, childKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
         t.Fatalf("%x %x %d %d\n", keyA2, keyB2, timestamp2, length2)
         return false
     })
@@ -946,7 +946,7 @@ func Test{{.T}}ScanCallbackMax(t *testing.T) {
         locmap.Set(keyA, 0{{if eq .t "group"}}, 0, 0{{end}}, 1, 2, 3, 4, false)
     }
     count := 0
-    stopped, more := locmap.ScanCallback(0, math.MaxUint64, 0, 0, math.MaxUint64, 50, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, nameKeyA2 uint64, nameKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
+    stopped, more := locmap.ScanCallback(0, math.MaxUint64, 0, 0, math.MaxUint64, 50, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, childKeyA2 uint64, childKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
         count++
         return true
     })
@@ -960,7 +960,7 @@ func Test{{.T}}ScanCallbackMax(t *testing.T) {
         t.Fatal("should have been more")
     }
     count = 0
-    stopped, more = locmap.ScanCallback(0, math.MaxUint64, 0, 0, math.MaxUint64, 5000, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, nameKeyA2 uint64, nameKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
+    stopped, more = locmap.ScanCallback(0, math.MaxUint64, 0, 0, math.MaxUint64, 5000, func(keyA2 uint64, keyB2 uint64{{if eq .t "group"}}, childKeyA2 uint64, childKeyB2 uint64{{end}}, timestamp2 uint64, length2 uint32) bool {
         count++
         return true
     })
@@ -1113,8 +1113,8 @@ func Test{{.T}}ExerciseSplitMergeDiscard(t *testing.T) {
 {{if eq .t "group"}}
 func TestGroupGetGroup(t *testing.T) {
     locmap := NewGroupLocMap(nil)
-    nameKeyA := uint64(0)
-    nameKeyB := uint64(0x10)
+    childKeyA := uint64(0)
+    childKeyB := uint64(0x10)
     timestamp := uint64(0x100)
     blockID := uint32(0x1000)
     offset := uint32(0x10000)
@@ -1123,13 +1123,13 @@ func TestGroupGetGroup(t *testing.T) {
     for keyA:=uint64(0);keyA<2;keyA++{
         for keyB:=uint64(0);keyB<2;keyB++{
             for i:=0;i<10;i++{
-                nameKeyA++
-                nameKeyB++
-                locmap.Set(keyA, keyB, nameKeyA, nameKeyB, timestamp, blockID, offset, length, false)
+                childKeyA++
+                childKeyB++
+                locmap.Set(keyA, keyB, childKeyA, childKeyB, timestamp, blockID, offset, length, false)
                 if keyA==0 && keyB==1 {
                     expected = append(expected, &GroupLocMapItem{
-                        NameKeyA:   nameKeyA,
-                        NameKeyB:   nameKeyB,
+                        ChildKeyA:   childKeyA,
+                        ChildKeyB:   childKeyB,
                         Timestamp:  timestamp,
                         BlockID:    blockID,
                         Offset:     offset,
@@ -1146,7 +1146,7 @@ func TestGroupGetGroup(t *testing.T) {
     for _, e := range expected {
         found := false
         for _, g := range items {
-            if e.NameKeyA == g.NameKeyA && e.NameKeyB == g.NameKeyB && e.Timestamp == g.Timestamp && e.BlockID == g.BlockID && e.Offset == g.Offset && e.Length == g.Length {
+            if e.ChildKeyA == g.ChildKeyA && e.ChildKeyB == g.ChildKeyB && e.Timestamp == g.Timestamp && e.BlockID == g.BlockID && e.Offset == g.Offset && e.Length == g.Length {
                 found = true
                 break
             }
